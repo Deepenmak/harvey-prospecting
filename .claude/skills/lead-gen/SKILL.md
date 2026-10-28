@@ -26,6 +26,13 @@ Defaults when an argument is missing: segment `mix`, credits = ask the user.
 | `exports/plan.csv` | The current candidate plan, replaced by each `--plan`. |
 | `exports/work/*.json` | This run's agent answers, cleared at the start of each run. |
 
+The lasting record is the **Optywise Leads** dashboard
+(https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4): its `contacts.json` and
+`runs.json` hold every contact and the ledger. `scripts/dashboard_sync.py`
+moves them both ways; ROUTINE.md has the restore and upload steps. In a cloud
+run, restore before Phase 0 and upload after Phase 7. On the laptop, upload
+after Phase 7 so the dashboard stays current.
+
 Fit, research, fact checks and drafts are columns on each contact's row
 (fit, fit_reason, intent, signals, red_flags, verified, verify_notes, angle,
 draft_subject, draft_body), so a lead's whole story is in one place. Never
@@ -58,9 +65,10 @@ ICP file: `optywise_icp.md` unless the user names another. Read it and
 
 1. `PY -m pytest -q tests/test_fetch.py` must pass.
 2. Empty `exports/work/` (create it if missing).
-3. Ledger: if `SHEET_WEBHOOK_URL` is set, try `H fetch --segment mix --dry-run --credits 1`.
-   If it fails with HTTP 401/403, don't fix it: prefix every later `H fetch`
-   with `SHEET_WEBHOOK_URL=` (local ledger) and tell the user you did.
+3. Ledger: the Google Sheet is retired; the ledger is `data/fetch_ledger.json`
+   (restored from the dashboard in a cloud run). If `SHEET_WEBHOOK_URL` is
+   set, prefix every `H fetch` with `SHEET_WEBHOOK_URL=` so the local ledger
+   is used.
 4. Credits left = `phase_credit_cap` minus the ledger's used credits. If the
    requested credits exceed that, say so and use the smaller number.
 
@@ -129,8 +137,8 @@ passed, or from title and company alone.
 
 `PY S/apply_review.py` applies whatever is in `exports/work/` (research,
 verify, drafts) to the matching rows and re-ranks both files: fit, then
-intent, then the fact check, then score. If the sheet works, run
-`H fetch --push-angles`.
+intent, then the fact check, then score. Then upload `contacts.json` and
+`runs.json` to the dashboard (ROUTINE.md, step 3).
 
 ## Phase 8: drafts (only with --drafts)
 

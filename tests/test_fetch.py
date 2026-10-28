@@ -143,6 +143,18 @@ def test_contact_files_rank_best_first_and_split_on_email(tmp_path):
     assert [r["apollo_id"] for r in read_contacts(all_path)] == ["1", "3", "2"]
 
 
+def test_cloud_run_refuses_without_a_restored_ledger(tmp_path, monkeypatch):
+    import harvey.fetch as fetch
+
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(fetch, "make_ledger",
+                        lambda: fetch.FileLedger(tmp_path / "missing.json"))
+    report = asyncio.run(fetch.run_fetch(None, None, segment="mix", credits=5))
+    assert report.stopped.startswith("no ledger")
+    assert report.credits_used == 0
+
+
 def test_helpers():
     assert domain_of("https://www.example.com/about") == "example.com"
     assert email_status("verified") == "verified"
