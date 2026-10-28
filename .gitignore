@@ -60,3 +60,6 @@ harvey.local.yaml
 # Backups and in-progress writes from `harvey train` hold the same config.
 harvey.local.yaml.*
 harvey.yaml.*
+
+# harvey fetch output (real contact data)
+exports/

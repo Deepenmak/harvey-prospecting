@@ -426,6 +426,51 @@ def cmd_export(args):
     asyncio.run(_export())
 
 
+def cmd_fetch(args):
+    """Source decision-makers from Apollo within the credit cap (segments.yaml)."""
+    import json
+
+    from harvey.config import load_config, load_env
+    from harvey.fetch import push_angles, run_fetch
+    from harvey.state import StateManager
+
+    load_env()  # APOLLO_HARVEY_KEY, SHEET_WEBHOOK_URL, SHEET_TOKEN from .env
+
+    async def _fetch():
+        if args.push_angles:
+            n = await push_angles(args.push_angles)
+            print(f"\n  Sent {n} angle(s) to the sheet.\n")
+            return
+        config = load_config()
+        state = StateManager()
+        await state.init_db()
+        report = await run_fetch(state, config, segment=args.segment,
+                                 credits=args.credits, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(report.as_dict(), indent=2))
+            return
+        print(f"\n  Segment: {report.segment}   (ledger: {report.ledger})")
+        if report.stopped:
+            print(f"  Stopped: {report.stopped}\n")
+            return
+        print(f"  Searched {report.searched} people (free), "
+              f"{report.candidates} new candidates")
+        if args.dry_run:
+            for r in report.rows:
+                print(f"    - {r['title']} at {r['company']}")
+            print("\n  Dry run: nothing enriched, no credits spent.\n")
+            return
+        print(f"  Enriched {report.enriched}, credits used {report.credits_used}, "
+              f"{report.credits_left} left in this phase")
+        for r in report.rows:
+            print(f"    {r['score']:>3}  {r['title']} at {r['company']} "
+                  f"[{r['email_status']}]" + (f"  hiring: {r['hiring_roles']}"
+                                               if r['hiring_roles'] else ""))
+        print(f"\n  CSV: {report.csv_path}\n")
+
+    asyncio.run(_fetch())
+
+
 def cmd_gmail(args):
     """Gmail provider utilities (auth / test)."""
     from harvey.config import load_env
@@ -985,6 +1030,21 @@ def main():
     sub.add_argument("--status", default="", help="Comma-separated pipeline statuses (e.g. new,queued); opted-out contacts stay excluded")
     sub.add_argument("--all", action="store_true", help="Export the raw list without filters, including opted-out contacts (not for outreach)")
     sub.set_defaults(func=cmd_export)
+
+    # harvey fetch
+    sub = subparsers.add_parser(
+        "fetch", help="Source decision-makers from Apollo within the credit cap"
+    )
+    sub.add_argument("--segment", default="auto",
+                     help="Segment key from segments.yaml (default: auto, rotates)")
+    sub.add_argument("--credits", type=int, default=None,
+                     help="Max credits this run (default: per_run_credits)")
+    sub.add_argument("--dry-run", action="store_true",
+                     help="Search and pick candidates only; spend no credits")
+    sub.add_argument("--json", action="store_true", help="Print the report as JSON")
+    sub.add_argument("--push-angles", default="", metavar="CSV",
+                     help="Send the angle column of a fetch CSV to the sheet")
+    sub.set_defaults(func=cmd_fetch)
 
     # harvey gmail auth|test
     sub = subparsers.add_parser("gmail", help="Gmail provider setup")

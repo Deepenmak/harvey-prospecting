@@ -1,0 +1,64 @@
+# Apollo sourcing segments for `harvey fetch`. Order = rotation order.
+# Reasoning behind each segment: optywise_icp.md.
+
+# Hard stop for this phase: fetch refuses to spend past it (the ledger
+# lives in the Google Sheet, or data/fetch_ledger.json when no sheet is set).
+phase_credit_cap: 50
+# Default spend per run. One enrichment that finds an email = 1 credit.
+per_run_credits: 10
+
+# Free profile signals fetch collects on every company it enriches.
+# Listing them here is the operator's confirmation (see harvey signals).
+confirm_signals: [HIRING_ROLE, OPEN_ROLES, TECH_STACK]
+
+# Title order = who to pick first when a company has several matches.
+# Champions (own the stuck workflow) before economic buyers.
+segments:
+  - key: us_insurance
+    label: US insurance carriers, MGAs and TPAs
+    keyword_tags: [insurance]
+    locations: [united states]
+    employees: ["200,5000"]
+    seniorities: [c_suite, vp, head, director]
+    titles: [Head of AI, VP Claims, Chief Claims Officer, Head of Underwriting,
+             Chief Underwriting Officer, VP Engineering, Chief Digital Officer,
+             Chief Information Officer, Chief Technology Officer, Chief Operating Officer]
+
+  - key: uk_insurance
+    label: UK and Ireland insurers, MGAs and Lloyd's market
+    keyword_tags: [insurance]
+    locations: [united kingdom, ireland]
+    employees: ["200,5000"]
+    seniorities: [c_suite, vp, head, director]
+    titles: [Head of AI, Claims Director, Head of Claims, Underwriting Director,
+             Head of Underwriting, Chief Digital Officer, Chief Information Officer,
+             Chief Technology Officer, Chief Operating Officer]
+
+  - key: us_rcm
+    label: US healthcare revenue cycle and health tech
+    keyword_tags: [revenue cycle management, medical billing]
+    locations: [united states]
+    employees: ["200,5000"]
+    seniorities: [c_suite, vp, head, director]
+    titles: [VP Revenue Cycle, Director of Revenue Cycle, Head of AI, VP Engineering,
+             Chief Technology Officer, Chief Information Officer, Chief Operating Officer]
+
+  - key: us_financial
+    label: US regional banks, lenders and fintechs
+    keyword_tags: [banking, lending, financial services]
+    locations: [united states]
+    employees: ["200,5000"]
+    seniorities: [c_suite, vp, head, director]
+    titles: [Head of AI, Head of Operations, Head of Compliance, VP Engineering,
+             Chief Digital Officer, Chief Information Officer, Chief Technology Officer,
+             Chief Operating Officer]
+
+  - key: ca_insurance
+    label: Canadian insurers and financial services
+    keyword_tags: [insurance, financial services]
+    locations: [canada]
+    employees: ["200,5000"]
+    seniorities: [c_suite, vp, head, director]
+    titles: [Head of AI, VP Claims, Head of Underwriting, VP Engineering,
+             Chief Digital Officer, Chief Information Officer, Chief Technology Officer,
+             Chief Operating Officer]
