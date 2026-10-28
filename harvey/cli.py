@@ -431,21 +431,26 @@ def cmd_fetch(args):
     import json
 
     from harvey.config import load_config, load_env
-    from harvey.fetch import push_angles, run_fetch
+    from harvey.fetch import CONTACTS_FILE, PLAN_FILE, push_angles, run_fetch
     from harvey.state import StateManager
 
     load_env()  # APOLLO_HARVEY_KEY, SHEET_WEBHOOK_URL, SHEET_TOKEN from .env
 
     async def _fetch():
         if args.push_angles:
-            n = await push_angles(args.push_angles)
-            print(f"\n  Sent {n} angle(s) to the sheet.\n")
+            n, sent = await push_angles(str(CONTACTS_FILE) if args.push_angles == "DEFAULT"
+                                        else args.push_angles)
+            print(f"\n  Sent {n} angle(s) to the sheet.\n" if sent else
+                  f"\n  {n} angle(s) kept in the local contact files (no sheet set).\n")
             return
         config = load_config()
         state = StateManager()
         await state.init_db()
         report = await run_fetch(state, config, segment=args.segment,
-                                 credits=args.credits, dry_run=args.dry_run)
+                                 credits=args.credits, dry_run=args.dry_run,
+                                 plan=args.plan,
+                                 from_plan=str(PLAN_FILE) if args.from_plan == "DEFAULT"
+                                 else args.from_plan)
         if args.json:
             print(json.dumps(report.as_dict(), indent=2))
             return
@@ -453,12 +458,17 @@ def cmd_fetch(args):
         if report.stopped:
             print(f"  Stopped: {report.stopped}\n")
             return
-        print(f"  Searched {report.searched} people (free), "
-              f"{report.candidates} new candidates")
-        if args.dry_run:
+        if not args.from_plan:
+            print(f"  Searched {report.searched} people (free), "
+                  f"{report.candidates} new candidates")
+        if args.plan or args.dry_run:
             for r in report.rows:
-                print(f"    - {r['title']} at {r['company']}")
-            print("\n  Dry run: nothing enriched, no credits spent.\n")
+                print(f"    - [{r['segment']}] {r['title']} at {r['company']}")
+            if args.plan:
+                print(f"\n  Plan: {report.csv_path}\n  Mark each row's verdict a, b "
+                      f"or skip, then run: harvey fetch --from-plan\n")
+            else:
+                print("\n  Dry run: nothing enriched, no credits spent.\n")
             return
         print(f"  Enriched {report.enriched}, credits used {report.credits_used}, "
               f"{report.credits_left} left in this phase")
@@ -466,7 +476,7 @@ def cmd_fetch(args):
             print(f"    {r['score']:>3}  {r['title']} at {r['company']} "
                   f"[{r['email_status']}]" + (f"  hiring: {r['hiring_roles']}"
                                                if r['hiring_roles'] else ""))
-        print(f"\n  CSV: {report.csv_path}\n")
+        print(f"\n  Contacts: {report.csv_path} (with email: exports/contacts_with_email.csv)\n")
 
     asyncio.run(_fetch())
 
@@ -1070,14 +1080,25 @@ def main():
         "fetch", help="Source decision-makers from Apollo within the credit cap"
     )
     sub.add_argument("--segment", default="auto",
-                     help="Segment key from segments.yaml (default: auto, rotates)")
+                     help="Segment key from segments.yaml, auto (rotates) or mix "
+                          "(every segment, credits shared in turn)")
     sub.add_argument("--credits", type=int, default=None,
                      help="Max credits this run (default: per_run_credits)")
     sub.add_argument("--dry-run", action="store_true",
                      help="Search and pick candidates only; spend no credits")
+    sub.add_argument("--plan", action="store_true",
+                     help="Write candidates to exports/plan.csv for review; "
+                          "spend no credits")
+    sub.add_argument("--from-plan", nargs="?", const="DEFAULT", default="",
+                     metavar="CSV",
+                     help="Enrich only the plan rows marked a or b "
+                          "(default: exports/plan.csv)")
     sub.add_argument("--json", action="store_true", help="Print the report as JSON")
-    sub.add_argument("--push-angles", default="", metavar="CSV",
-                     help="Send the angle column of a fetch CSV to the sheet")
+    sub.add_argument("--push-angles", nargs="?", const="DEFAULT",
+                     default="", metavar="CSV",
+                     help="Send the angle column to the sheet "
+                          "(default: exports/contacts_all.csv, which also "
+                          "refreshes contacts_with_email.csv)")
     sub.set_defaults(func=cmd_fetch)
 
     # harvey gmail auth|test

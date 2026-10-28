@@ -1,7 +1,13 @@
 """harvey fetch: candidate choice and segment rotation (no network)."""
 
-from harvey.fetch import (choose_candidates, domain_of, email_status,
-                          pick_segment, title_priority)
+import asyncio
+
+import csv
+
+from harvey.fetch import (FileLedger, choose_candidates, domain_of, email_status,
+                          interleave, merge_contacts, pick_segment, plan_picks,
+                          read_contacts, relevant_roles, save_contacts, score,
+                          title_priority, update_contacts)
 
 TITLES = ["Head of AI", "VP Claims", "Chief Technology Officer"]
 
@@ -41,6 +47,100 @@ def test_auto_rotates_after_last_segment():
     assert pick_segment(spec, "auto", "a")["key"] == "b"
     assert pick_segment(spec, "auto", "b")["key"] == "a"
     assert pick_segment(spec, "b", "b")["key"] == "b"
+
+
+def test_title_priority_matches_whole_words_in_order():
+    # "ai" sits inside "claims", "of" inside "office": neither counts.
+    assert title_priority("Head of Claims", TITLES) == len(TITLES)
+    assert title_priority("Head Office Claims Technical Advisor", ["Head of Claims"]) == 1
+    assert title_priority("Head of Retail", ["Head of AI"]) == 1
+    # Spellings of the same title fold together.
+    assert title_priority("SVP, Claims", TITLES) == 1
+    assert title_priority("Executive Vice President of Claims", TITLES) == 1
+    assert title_priority("CTO & Co-founder", TITLES) == 2
+    assert title_priority("CIO", ["Chief Information Officer"]) == 0
+    assert title_priority("Head of Artificial Intelligence", TITLES) == 0
+
+
+def test_interleave_shares_in_turn():
+    assert interleave([[1, 2, 3], ["a"], ["x", "y"]]) == [1, "a", "x", 2, "y", 3]
+    assert interleave([]) == []
+
+
+def test_plan_picks_keeps_reviewed_rows_and_collects_skips():
+    rows = [
+        {"segment": "b", "apollo_id": "1", "company": "Example Mutual", "verdict": "A"},
+        {"segment": "a", "apollo_id": "7", "company": "Sample Lender", "verdict": "b"},
+        {"segment": "a", "apollo_id": "2", "company": "Sample Bank", "verdict": "a"},
+        {"segment": "a", "apollo_id": "3", "company": "Example Media", "verdict": "skip"},
+        {"segment": "a", "apollo_id": "4", "company": "Unreviewed Co", "verdict": ""},
+        {"segment": "a", "apollo_id": "5", "company": "Fetched Co", "verdict": "a"},
+        {"segment": "z", "apollo_id": "6", "company": "Gone Segment Co", "verdict": "a"},
+    ]
+    groups, skipped = plan_picks(rows, ["a", "b"], set(), {"fetched co"})
+    # Strong fits ("a") get credits before fits ("b").
+    assert [[r["apollo_id"] for r in g] for g in groups] == [["2", "7"], ["1"]]
+    assert skipped == ["example media"]
+
+
+def test_skipped_orgs_are_remembered(tmp_path):
+    ledger = FileLedger(tmp_path / "ledger.json")
+    run = {"segment": "a", "credits_used": 1, "seen_ids": ["1"],
+           "skipped_orgs": ["example media"]}
+    asyncio.run(ledger.record(run, [{"company": "Example Mutual"}]))
+    state = asyncio.run(ledger.load())
+    assert state.seen_orgs == {"example mutual", "example media"}
+    assert state.credits_used == 1
+
+
+def test_only_icp_hiring_roles_count():
+    texts = ["How to Apply", "Billing Operations Representative I",
+             "Senior Machine Learning Engineer · Data · Remote · posted 2026-10-01"]
+    keywords = ["machine learning engineer", "ai engineer"]
+    assert relevant_roles(texts, keywords) == [texts[2]]
+    assert relevant_roles(texts, []) == texts
+
+
+def test_score_spreads_by_size_and_verdict():
+    seg = {"titles": ["VP Claims"]}
+    row = {"title": "VP Claims", "email_status": "verified", "hiring_roles": "",
+           "employees": "400"}
+    assert score(row, seg, "a") - score(row, seg, "b") == 10
+    big = dict(row, employees="4500")
+    assert score(row, seg) - score(big, seg) == 5
+
+
+def contact(pid, email="", score="80", **kw):
+    return dict({"apollo_id": pid, "company": f"Example {pid}", "email": email,
+                 "score": score}, **kw)
+
+
+def test_contacts_merge_by_id_and_never_erase():
+    old = [contact("1", "a@example.com", angle="Kept angle", fit="a")]
+    new = [contact("1", "a@example.com", score="90"), contact("2")]
+    rows = {r["apollo_id"]: r for r in merge_contacts(old, new)}
+    assert set(rows) == {"1", "2"}
+    assert rows["1"]["score"] == "90"
+    assert rows["1"]["angle"] == "Kept angle"  # an empty update never erases
+    # Updates for unknown contacts are dropped unless asked to add them.
+    assert [r["apollo_id"] for r in merge_contacts(old, new, add_new=False)] == ["1"]
+
+
+def test_contact_files_rank_best_first_and_split_on_email(tmp_path):
+    all_path, email_path = tmp_path / "all.csv", tmp_path / "email.csv"
+    save_contacts([contact("1", "x@example.com", fit="b"),
+                   contact("2", fit="a"),
+                   contact("3", "y@example.com", fit="a", intent="high")],
+                  all_path, email_path)
+    assert [r["apollo_id"] for r in read_contacts(all_path)] == ["3", "2", "1"]
+    with open(email_path, newline="", encoding="utf-8") as f:
+        assert [r["apollo_id"] for r in csv.DictReader(f)] == ["3", "1"]
+    # A second run updates the same two files in place.
+    n = update_contacts([{"apollo_id": "1", "intent": "high", "fit": "a", "score": "95"},
+                         {"apollo_id": "9", "intent": "high"}],
+                        path=all_path, email_path=email_path)
+    assert n == 1
+    assert [r["apollo_id"] for r in read_contacts(all_path)] == ["1", "3", "2"]
 
 
 def test_helpers():

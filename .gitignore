@@ -36,8 +36,11 @@ AGENTS.md
 .DS_Store
 Thumbs.db
 
-# Claude
-.claude/
+# Claude: local settings stay local; the lead-gen skill and its agents are
+# shared so a cloud run can use them.
+.claude/*
+!.claude/skills/
+!.claude/agents/
 
 # Internal context (not for public repo)
 .context.md
