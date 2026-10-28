@@ -3,7 +3,7 @@
 
 # Hard stop for this phase: fetch refuses to spend past it (the ledger
 # lives in the Google Sheet, or data/fetch_ledger.json when no sheet is set).
-phase_credit_cap: 30
+phase_credit_cap: 80
 # Default spend per run. One enrichment that finds an email = 1 credit.
 per_run_credits: 10
 

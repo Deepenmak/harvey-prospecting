@@ -511,6 +511,14 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
         return FetchReport(segment=segment, ledger="none",
                            stopped="SHEET_WEBHOOK_URL is not set; refusing to "
                                    "spend credits without the sheet ledger")
+    if (isinstance(ledger, FileLedger) and os.getenv("CLAUDE_CODE_REMOTE")
+            and not ledger.path.exists()):
+        # A Claude cloud run starts from a fresh clone too, but it can bring
+        # the ledger back from the leads dashboard before fetching.
+        return FetchReport(segment=segment, ledger="none",
+                           stopped="no ledger in this cloud checkout; restore it "
+                                   "from the leads dashboard first "
+                                   "(dashboard_sync.py restore)")
     led = await ledger.load()
     by_key = {s["key"]: s for s in spec["segments"]}
     segs = (spec["segments"] if segment == "mix"

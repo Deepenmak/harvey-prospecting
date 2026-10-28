@@ -1,51 +1,59 @@
-# Daily prospect fetch (Claude cloud scheduled task)
+# Scheduled lead fetch (Claude cloud scheduled task)
 
-## Environment variables (set in the cloud environment, never committed)
+Runs on Anthropic's cloud on a schedule, so it works with the laptop off.
+The lasting record is the **Optywise Leads** dashboard, a private claude.ai
+artifact: https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4. Each run starts
+from a fresh clone, so it restores Harvey's contacts and ledger from the
+dashboard first and writes them back at the end. `harvey fetch` refuses to
+run in the cloud when no ledger was restored, so a run can never forget what
+earlier runs spent or fetched.
 
-```
-APOLLO_HARVEY_KEY=<Apollo API key>
-SHEET_WEBHOOK_URL=<Apps Script web app URL, ends in /exec>
-SHEET_TOKEN=<same token as TOKEN in the Apps Script>
-```
+## Task settings (claude.ai/code/routines)
 
-Setup script: `pip install -e .`
-Network access: Full. The run calls api.apollo.io, script.google.com and each company's own website.
+- Repository: `Deepenmak/harvey-prospecting`
+- Environment: network access **Full** (profiling and research read each
+  company's own website); setup script `pip install -e .`; variable
+  `APOLLO_HARVEY_KEY=<Apollo API key>`. Don't set `SHEET_WEBHOOK_URL`.
+- Schedule: weekdays, 07:00 Asia/Kolkata (cloud tasks run at most hourly).
+- Connectors: none needed. Add Gmail only if you want a summary email.
 
 ## Prompt for the scheduled task
 
 ```
-You are running Optywise's daily prospect fetch with Harvey. Do exactly this:
+You are running Optywise's scheduled lead fetch with Harvey, unattended:
+nobody will answer questions, so never wait for input. Python is `python`
+(the setup script installed Harvey). The dashboard is
+https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
 
-1. If `harvey` is not installed, run `pip install -e .`.
-2. Run `harvey fetch --segment mix --plan --json`. It searches every segment
-   for free and writes candidates to exports/plan.csv; no credits are
-   spent. If the report has "stopped" set, report that and finish.
-3. Read optywise_icp.md. Free search shows only the company name, so you are
-   the industry filter. For every plan row set `verdict` to `a` (strong fit),
-   `b` (fit) or `skip`, and write a short `reason`. Skip brokers, IT services
-   and AI consultancies, software vendors, companies with large in-house AI
-   teams, subsidiaries of Fortune 500 groups that buy through central IT,
-   government bodies, companies in distress, and contacts based outside the
-   segment's market. Skipped companies are never offered again.
-4. Run `harvey fetch --from-plan --json`. It enriches the a rows first,
-   sharing credits across segments in turn, never passes the phase cap in
-   segments.yaml, and folds the new contacts into exports/contacts_all.csv
-   and exports/contacts_with_email.csv (no file per run).
-5. In exports/contacts_all.csv, for each row whose apollo_id is in the
-   report's new_ids, write the `angle` column: one plain sentence on why
-   this person at this company might need Optywise's six-week FDE
-   engagement, based on their title, company, industry, employees,
-   hiring_roles and tech_stack. No asterisks, no arrows, no invented facts.
-6. Save the file, then run `harvey fetch --push-angles`. It refreshes
-   contacts_with_email.csv from your edits and sends the angles to the
-   sheet. A cloud run starts from a fresh checkout, so the sheet is its
-   lasting record of contacts.
-7. Finish with a short summary: prospects added per segment, credits used
-   this run and left in the phase, the top three prospects with their
-   angle, the companies you skipped and why, and any errors.
+1. Restore. With ArtifactData `get` read `datasets/contacts` and
+   `datasets/runs` on the dashboard; each has `source.url` `/_blob/<id>`.
+   Read each file with the Artifact tool (`action: read`, `path: <id>`),
+   copy them to exports/dashboard/contacts.json and
+   exports/dashboard/runs.json, then run
+   `python .claude/skills/lead-gen/scripts/dashboard_sync.py restore exports/dashboard`.
+   If any of this fails, stop and report it: never fetch without the ledger.
+2. Run the lead-gen skill (.claude/skills/lead-gen/SKILL.md) as if invoked
+   with `<per_run_credits from segments.yaml> mix --yes`, phases 0 to 7.
+   Skip the sheet step. Research at most the top 10 new leads. If fetch
+   reports "stopped" (the credit cap is reached), skip to step 4.
+3. Export. `python .claude/skills/lead-gen/scripts/dashboard_sync.py export exports/dashboard`.
+   Upload exports/dashboard/contacts.json and runs.json to the dashboard,
+   one Artifact call each (`url` the dashboard, `file_path`, `asset: true`).
+   Then ArtifactData `update` `datasets/contacts` and `datasets/runs`
+   (pin `if_version` from step 1) with the new `source.url`, `source.name`
+   and `updated: {at: <ISO time now>, by: "Claude scheduled run"}`. Then
+   delete the two old assets (Artifact `action: delete`, `path: <old id>`).
+4. Report in the run summary: credits used this run and left in the phase,
+   new contacts per segment, how many show buying intent, the top five new
+   leads with their angle, companies skipped and why, and any errors. If a
+   Gmail tool is available, send the same summary with the dashboard link
+   to the account's own address (or save it as a draft if sending isn't
+   offered).
 
-Never send email, never edit segments.yaml or the credit cap, never commit
-or push to the repository.
+Never send email to prospects, approve the Outbox or turn on autopilot.
+Never edit segments.yaml or the credit cap. Never commit or push.
 ```
 
-Schedule: weekdays, once a day. Each run spends `per_run_credits` (10) shared across all five segments. Once the ledger reaches `phase_credit_cap` in segments.yaml every run stops itself until the cap is raised.
+Each run spends `per_run_credits` (10), shared across the five segments.
+Once the ledger reaches `phase_credit_cap` in segments.yaml every run stops
+itself before spending, until the cap is raised.
