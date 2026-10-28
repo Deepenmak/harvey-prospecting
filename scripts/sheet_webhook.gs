@@ -6,9 +6,11 @@
  * Web app (Execute as: Me, Who has access: Anyone). Put the web app URL in
  * SHEET_WEBHOOK_URL and the same TOKEN in SHEET_TOKEN.
  *
- * GET  ?token=...                 -> {seen_ids, seen_orgs, credits_used, last_segment}
+ * POST {token, action: 'load'}    -> {seen_ids, seen_orgs, credits_used, last_segment}
  * POST {token, columns, rows, run} -> appends prospects and a run record
  * POST {token, angles: {id: text}} -> fills the angle column for those rows
+ *
+ * The token travels only in the POST body, never in the URL.
  */
 
 const TOKEN = 'CHANGE-ME-TO-A-LONG-RANDOM-STRING';
@@ -46,7 +48,10 @@ function json_(obj) {
 }
 
 function doGet(e) {
-  if (e.parameter.token !== TOKEN) return json_({error: 'unauthorized'});
+  return json_({ok: true, note: 'POST only'});
+}
+
+function load_() {
   const prospects = records_(sheet_(PROSPECTS));
   const runs = records_(sheet_(RUNS, RUN_COLUMNS));
   const ids = new Set(prospects.map(p => String(p.apollo_id)).filter(String));
@@ -62,6 +67,7 @@ function doGet(e) {
 function doPost(e) {
   const body = JSON.parse(e.postData.contents);
   if (body.token !== TOKEN) return json_({error: 'unauthorized'});
+  if (body.action === 'load') return load_();
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {

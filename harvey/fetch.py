@@ -195,32 +195,38 @@ class SheetLedger:
     def __init__(self, url: str, token: str):
         self.url, self.token = url, token
 
-    async def _call(self, method: str, body: dict | None = None) -> dict:
+    async def _call(self, body: dict) -> dict:
+        # The token rides in the POST body only, never the URL, so it can't
+        # leak into logs or error messages.
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-            if method == "GET":
-                r = await c.get(self.url, params={"token": self.token})
-            else:
-                r = await c.post(self.url, content=json.dumps(dict(body, token=self.token)),
-                                 headers={"Content-Type": "text/plain"})
-        r.raise_for_status()
-        data = r.json()
+            r = await c.post(self.url, content=json.dumps(dict(body, token=self.token)),
+                             headers={"Content-Type": "text/plain"})
+        if r.status_code != 200:
+            hint = (" (is the web app deployed with access: Anyone?)"
+                    if r.status_code in (401, 403) else "")
+            raise RuntimeError(f"Sheet webhook returned HTTP {r.status_code}{hint}")
+        try:
+            data = r.json()
+        except ValueError:
+            raise RuntimeError("Sheet webhook did not return JSON (check the "
+                               "deployment URL ends in /exec)") from None
         if data.get("error"):
             raise RuntimeError(f"Sheet webhook: {data['error']}")
         return data
 
     async def load(self) -> LedgerState:
-        d = await self._call("GET")
+        d = await self._call({"action": "load"})
         return LedgerState(seen_ids=set(d.get("seen_ids", [])),
                            seen_orgs={o.lower() for o in d.get("seen_orgs", [])},
                            credits_used=int(d.get("credits_used", 0)),
                            last_segment=d.get("last_segment", ""))
 
     async def record(self, run: dict, rows: list[dict]):
-        await self._call("POST", {"columns": ROW_COLUMNS, "rows": rows,
-                                  "run": dict(run, seen_ids=",".join(run["seen_ids"]))})
+        await self._call({"columns": ROW_COLUMNS, "rows": rows,
+                          "run": dict(run, seen_ids=",".join(run["seen_ids"]))})
 
     async def push_angles(self, angles: dict[str, str]):
-        await self._call("POST", {"angles": angles})
+        await self._call({"angles": angles})
 
 
 def make_ledger():
@@ -283,6 +289,12 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
                     dry_run: bool = False) -> FetchReport:
     spec = load_segments()
     ledger = make_ledger()
+    if isinstance(ledger, FileLedger) and os.getenv("GITHUB_ACTIONS"):
+        # A CI checkout is fresh every run: a local ledger would forget what
+        # was spent and fetched, so the credit cap would mean nothing.
+        return FetchReport(segment=segment, ledger="none",
+                           stopped="SHEET_WEBHOOK_URL is not set; refusing to "
+                                   "spend credits without the sheet ledger")
     led = await ledger.load()
     seg = pick_segment(spec, segment, led.last_segment)
     cap = int(spec.get("phase_credit_cap", 0))
