@@ -3,7 +3,7 @@
 
 # Hard stop for this phase: fetch refuses to spend past it (the ledger
 # lives in the Google Sheet, or data/fetch_ledger.json when no sheet is set).
-phase_credit_cap: 50
+phase_credit_cap: 30
 # Default spend per run. One enrichment that finds an email = 1 credit.
 per_run_credits: 10
 
@@ -13,30 +13,40 @@ confirm_signals: [HIRING_ROLE, OPEN_ROLES, TECH_STACK]
 
 # Title order = who to pick first when a company has several matches.
 # Champions (own the stuck workflow) before economic buyers.
+#
+# Keyword tags: Apollo's broad tags ("insurance", "financial services",
+# "banking") match anyone who mentions the word, so "Head of AI" under them
+# pulls in media, edtech, consultancies and AI vendors. Use the narrow tags,
+# and lead with industry-specific titles (claims, underwriting, revenue
+# cycle), which act as an industry filter of their own. Free search shows no
+# industry, so this is the only guard before a credit is spent.
 segments:
   - key: us_insurance
-    label: US insurance carriers, MGAs and TPAs
-    keyword_tags: [insurance]
+    label: US P&C and specialty carriers, MGAs, TPAs and insurtechs
+    keyword_tags: [property & casualty insurance, insurance carrier, specialty insurance,
+                   managing general agent, insurtech, third party administrator]
     locations: [united states]
     employees: ["200,5000"]
     seniorities: [c_suite, vp, head, director]
-    titles: [Head of AI, VP Claims, Chief Claims Officer, Head of Underwriting,
-             Chief Underwriting Officer, VP Engineering, Chief Digital Officer,
-             Chief Information Officer, Chief Technology Officer, Chief Operating Officer]
+    titles: [Chief Claims Officer, VP Claims, Head of Claims, Head of Underwriting Operations,
+             Chief Underwriting Officer, Head of Underwriting, Head of AI, Chief Digital Officer,
+             Chief Innovation Officer, VP Engineering, Chief Information Officer,
+             Chief Technology Officer, Chief Operating Officer]
 
   - key: uk_insurance
-    label: UK and Ireland insurers, MGAs and Lloyd's market
-    keyword_tags: [insurance]
+    label: UK and Ireland Lloyd's market, MGAs, specialty and general insurers
+    keyword_tags: [lloyd's, specialty insurance, managing general agent, insurtech,
+                   general insurance, reinsurance]
     locations: [united kingdom, ireland]
     employees: ["200,5000"]
     seniorities: [c_suite, vp, head, director]
-    titles: [Head of AI, Claims Director, Head of Claims, Underwriting Director,
-             Head of Underwriting, Chief Digital Officer, Chief Information Officer,
-             Chief Technology Officer, Chief Operating Officer]
+    titles: [Head of Claims, Claims Director, Head of Underwriting, Underwriting Director,
+             Head of AI, Chief Operating Officer, Chief Digital Officer,
+             Chief Information Officer, Chief Technology Officer]
 
   - key: us_rcm
-    label: US healthcare revenue cycle and health tech
-    keyword_tags: [revenue cycle management, medical billing]
+    label: US healthcare revenue cycle, medical billing and practice management
+    keyword_tags: [revenue cycle management, medical billing, physician practice management]
     locations: [united states]
     employees: ["200,5000"]
     seniorities: [c_suite, vp, head, director]
@@ -44,21 +54,22 @@ segments:
              Chief Technology Officer, Chief Information Officer, Chief Operating Officer]
 
   - key: us_financial
-    label: US regional banks, lenders and fintechs
-    keyword_tags: [banking, lending, financial services]
+    label: US community banks, large credit unions and lenders
+    keyword_tags: [community banking, credit union, consumer lending, mortgage lending]
     locations: [united states]
     employees: ["200,5000"]
     seniorities: [c_suite, vp, head, director]
-    titles: [Head of AI, Head of Operations, Head of Compliance, VP Engineering,
-             Chief Digital Officer, Chief Information Officer, Chief Technology Officer,
-             Chief Operating Officer]
+    titles: [Head of AI, Head of Operations, Head of Compliance, Chief Digital Officer,
+             Chief Innovation Officer, VP Engineering, Chief Information Officer,
+             Chief Technology Officer, Chief Operating Officer]
 
   - key: ca_insurance
-    label: Canadian insurers and financial services
-    keyword_tags: [insurance, financial services]
+    label: Canadian P&C, specialty and life insurers
+    keyword_tags: [property & casualty insurance, insurance carrier, specialty insurance,
+                   life insurance, managing general agent, insurtech]
     locations: [canada]
     employees: ["200,5000"]
     seniorities: [c_suite, vp, head, director]
-    titles: [Head of AI, VP Claims, Head of Underwriting, VP Engineering,
-             Chief Digital Officer, Chief Information Officer, Chief Technology Officer,
-             Chief Operating Officer]
+    titles: [VP Claims, Head of Claims, Head of Underwriting, Chief Underwriting Officer,
+             Head of AI, Chief Digital Officer, VP Engineering, Chief Information Officer,
+             Chief Technology Officer, Chief Operating Officer]

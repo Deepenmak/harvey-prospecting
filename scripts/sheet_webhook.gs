@@ -6,7 +6,7 @@
  * Web app (Execute as: Me, Who has access: Anyone). Put the web app URL in
  * SHEET_WEBHOOK_URL and the same TOKEN in SHEET_TOKEN.
  *
- * POST {token, action: 'load'}    -> {seen_ids, seen_orgs, credits_used, last_segment}
+ * POST {token, action: 'load'}    -> {seen_ids, seen_orgs, skipped_orgs, credits_used, last_segment}
  * POST {token, columns, rows, run} -> appends prospects and a run record
  * POST {token, angles: {id: text}} -> fills the angle column for those rows
  *
@@ -17,7 +17,7 @@ const TOKEN = 'CHANGE-ME-TO-A-LONG-RANDOM-STRING';
 const PROSPECTS = 'Prospects';
 const RUNS = 'Runs';
 const RUN_COLUMNS = ['ran_at', 'segment', 'searched', 'enriched', 'credits_used',
-                     'prospects', 'seen_ids'];
+                     'prospects', 'seen_ids', 'skipped_orgs'];
 
 function sheet_(name, columns) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -31,6 +31,11 @@ function sheet_(name, columns) {
   if (columns && sh.getLastRow() === 0) {
     sh.appendRow(columns);
     sh.setFrozenRows(1);
+  } else if (columns) {
+    // Columns added since the sheet was made go on the end of the header.
+    const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    const missing = columns.filter(c => head.indexOf(c) < 0);
+    if (missing.length) sh.getRange(1, head.length + 1, 1, missing.length).setValues([missing]);
   }
   return sh;
 }
@@ -59,6 +64,8 @@ function load_() {
   return json_({
     seen_ids: Array.from(ids),
     seen_orgs: Array.from(new Set(prospects.map(p => String(p.company)).filter(String))),
+    // Companies a reviewer marked skip in a plan: never offered again.
+    skipped_orgs: Array.from(new Set(runs.flatMap(r => String(r.skipped_orgs || '').split('|')).filter(String))),
     credits_used: runs.reduce((n, r) => n + (Number(r.credits_used) || 0), 0),
     last_segment: runs.length ? String(runs[runs.length - 1].segment) : '',
   });

@@ -1,15 +1,25 @@
 """FETCH: source decision-makers from Apollo on a budget, then profile them.
 
-One run = one segment from segments.yaml:
+One run = one segment from segments.yaml, or every segment (``mix``):
 
 1. Search Apollo (free) for people matching the segment.
-2. Drop anyone already fetched (the ledger), keep one person per company,
-   and rank by the segment's title order.
+2. Drop anyone already fetched or skipped (the ledger), keep one person per
+   company, and rank by the segment's title order.
 3. Enrich the top N (1 credit each when an email is found), never past
-   ``phase_credit_cap`` across all runs.
+   ``phase_credit_cap`` across all runs. With ``mix`` the credits go round
+   the segments in turn, so one run covers every segment.
 4. Store companies and prospects in Harvey's database, read each company's
    own site (free) for hiring and tech-stack signals, and score.
-5. Write a CSV, and append rows plus a run record to the Google Sheet.
+5. Fold the rows into the two contact files (exports/contacts_all.csv and
+   exports/contacts_with_email.csv; no file per run), and append rows plus a
+   run record to the Google Sheet.
+
+Free search shows only a company's name, never its industry or size, so a
+keyword tag alone lets misfits through. The judgement step sits between 2
+and 3: ``--plan`` writes the candidates to exports/plan.csv, Claude marks each one
+``a`` (strong fit), ``b`` (fit) or ``skip`` against optywise_icp.md, and
+``--from-plan`` spends credits on the kept rows only. Skipped companies go
+in the ledger so no later search offers them again.
 
 The ledger is the Google Sheet when SHEET_WEBHOOK_URL is set (so a cloud
 run with a fresh clone still knows what earlier runs spent and fetched),
@@ -19,7 +29,9 @@ and data/fetch_ledger.json otherwise.
 import csv
 import json
 import logging
+import math
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +39,7 @@ from pathlib import Path
 import httpx
 import yaml
 
+from harvey.collectors.ats import Posting, matching_roles, role_keywords
 from harvey.integrations.apollo import ApolloClient, apollo_key
 from harvey.models.company import Company
 from harvey.models.prospect import Prospect
@@ -37,7 +50,19 @@ logger = logging.getLogger("harvey.fetch")
 SEGMENTS_FILE = PROJECT_ROOT / "segments.yaml"
 LOCAL_LEDGER = PROJECT_ROOT / "data" / "fetch_ledger.json"
 EXPORT_DIR = PROJECT_ROOT / "exports"
+# Two files, updated in place by every run: every contact ever fetched, and
+# the same rows narrowed to those with an email. Best first in both.
+CONTACTS_FILE = EXPORT_DIR / "contacts_all.csv"
+EMAIL_CONTACTS_FILE = EXPORT_DIR / "contacts_with_email.csv"
+# The current candidate plan, replaced by each --plan run.
+PLAN_FILE = EXPORT_DIR / "plan.csv"
 MAX_SEARCH_PAGES = 5
+# A plan lists this many candidates per credit, so every skip has a stand-in.
+PLAN_RESERVE = 3
+PLAN_COLUMNS = ["segment", "apollo_id", "first_name", "title", "company",
+                "title_rank", "verdict", "reason"]
+# Plan verdicts that get a credit. "a" is a strong fit and scores higher.
+KEEP_VERDICTS = ("a", "b")
 
 ROW_COLUMNS = [
     "fetched_at", "segment", "apollo_id", "first_name", "last_name", "title",
@@ -45,6 +70,14 @@ ROW_COLUMNS = [
     "industry", "employees", "city", "state", "country", "hiring_roles",
     "open_roles", "tech_stack", "score", "angle", "status",
 ]
+# Judgement added to a contact after it's fetched: the plan reviewer's fit,
+# web research, its fact check, and a first-touch draft (never sent).
+REVIEW_COLUMNS = ["fit", "fit_reason", "intent", "signals", "red_flags",
+                  "verified", "verify_notes", "draft_subject", "draft_body"]
+CONTACT_COLUMNS = ROW_COLUMNS + REVIEW_COLUMNS
+_FIT_ORDER = {"a": 0, "b": 1, "skip": 3}
+_INTENT_ORDER = {"high": 0, "medium": 1, "low": 2}
+_CHECK_ORDER = {"pass": 0, "partial": 1, "fail": 2}
 
 # Apollo's seniority vocabulary → Harvey's.
 SENIORITY = {"owner": "c_suite", "founder": "c_suite", "c_suite": "c_suite",
@@ -88,13 +121,80 @@ def search_filters(seg: dict) -> dict:
     return filters
 
 
+# Spellings of the same title, folded to one before comparing. Order matters:
+# "Senior Vice President" becomes "senior vp", then "vp".
+_TITLE_FOLD = tuple((re.compile(p, re.I), r) for p, r in (
+    (r"\bvice[\s-]+president\b", "vp"),
+    (r"\bsr\b\.?", "senior"),
+    (r"\b(?:senior|executive|assistant|group)\s+vp\b|\b[sea]vp\b", "vp"),
+    (r"\bchief\s+executive\s+officer\b", "ceo"),
+    (r"\bchief\s+technology\s+officer\b", "cto"),
+    (r"\bchief\s+information\s+officer\b", "cio"),
+    (r"\bchief\s+operating\s+officer\b", "coo"),
+    (r"\bartificial\s+intelligence\b", "ai"),
+))
+_TITLE_FILLER = frozenset({"of", "the", "and", "for", "a", "an", "to"})
+
+
+def _title_words(text: str) -> list[str]:
+    for pattern, replacement in _TITLE_FOLD:
+        text = pattern.sub(replacement, text or "")
+    return [w for w in re.findall(r"[a-z0-9+#]+", text.lower()) if w not in _TITLE_FILLER]
+
+
 def title_priority(title: str, titles: list[str]) -> int:
-    """Index of the first segment title whose words all appear in ``title``."""
-    low = (title or "").lower()
+    """Index of the first segment title found in ``title`` as a run of whole
+    words: "VP of Claims" is "VP Claims", but "Head of Claims" isn't "Head of
+    AI" and "Head Office Claims Advisor" isn't "Head of Claims"."""
+    words = _title_words(title)
     for i, wanted in enumerate(titles):
-        if all(w in low for w in wanted.lower().split()):
+        w = _title_words(wanted)
+        if w and any(words[j:j + len(w)] == w for j in range(len(words) - len(w) + 1)):
             return i
     return len(titles)
+
+
+def interleave(groups: list[list]) -> list:
+    """Round-robin across groups: one from each in turn, so a budget spent
+    from the front is shared evenly, and a short group's share goes to the rest."""
+    out = []
+    for i in range(max((len(g) for g in groups), default=0)):
+        out.extend(g[i] for g in groups if i < len(g))
+    return out
+
+
+def plan_picks(rows: list[dict], order: list[str], seen_ids: set,
+               seen_orgs: set) -> tuple[list[list[dict]], list[str]]:
+    """Kept plan rows grouped by segment (in ``order``), strong fits ("a")
+    first, and the skipped orgs. Rows with no verdict wait for review.
+    """
+    groups: dict[str, list[dict]] = {key: [] for key in order}
+    skipped: list[str] = []
+    for r in rows:
+        verdict = (r.get("verdict") or "").strip().lower()
+        org = (r.get("company") or "").strip()
+        if verdict == "skip" and org:
+            skipped.append(org.lower())
+        elif (verdict in KEEP_VERDICTS and r.get("segment") in groups
+              and r.get("apollo_id") not in seen_ids and org.lower() not in seen_orgs):
+            groups[r["segment"]].append(r)
+    for g in groups.values():
+        g.sort(key=lambda r: r["verdict"].strip().lower() != "a")
+    return [g for g in groups.values() if g], skipped
+
+
+def relevant_roles(texts: list[str], keywords: list[str]) -> list[str]:
+    """Hiring roles that name one of ``keywords`` (icp.hiring_signals).
+
+    A careers page with no job board is read for any heading that looks like
+    a job ("How to Apply", "Billing Representative"); for an Optywise lead only
+    an AI or automation role is a buying signal.
+    """
+    if not keywords:
+        return texts
+    # Board rows read "Title · Department · Location": the title is first.
+    return [t for t in texts
+            if matching_roles([Posting(title=t.split(" · ")[0])], keywords)]
 
 
 def choose_candidates(people: list[dict], titles: list[str], seen_ids: set,
@@ -129,8 +229,9 @@ def email_status(apollo_status: str) -> str:
     return "verified" if (apollo_status or "").lower() == "verified" else "guess"
 
 
-def score(row: dict, seg: dict) -> int:
-    """Deterministic fit score, 1-100. The routine's angle adds the judgement."""
+def score(row: dict, seg: dict, verdict: str = "") -> int:
+    """Fit score, 1-100: title, deliverability, hiring and size, plus the
+    plan reviewer's verdict ("a" = strong fit). The angle explains it."""
     s = 40
     rank = title_priority(row["title"], seg.get("titles", []))
     s += max(0, 25 - rank * 3)
@@ -142,9 +243,76 @@ def score(row: dict, seg: dict) -> int:
         emp = int(row["employees"] or 0)
     except ValueError:
         emp = 0
-    if 200 <= emp <= 5000:
+    # 200-2,000 staff spend $60-150K without a board vote and rarely have
+    # their own ML team; the top of the range is a slower sale.
+    if 200 <= emp <= 2000:
+        s += 10
+    elif 2000 < emp <= 5000:
+        s += 5
+    if verdict.strip().lower() == "a":
         s += 10
     return max(1, min(100, s))
+
+
+# ── Contact files ────────────────────────────────────────────────────
+
+
+def contact_rank(row: dict) -> tuple:
+    """Best first: reviewer's fit, researched intent, fact check, then score."""
+    try:
+        s = int(row.get("score") or 0)
+    except ValueError:
+        s = 0
+    return (_FIT_ORDER.get((row.get("fit") or "").lower(), 2),
+            _INTENT_ORDER.get((row.get("intent") or "").lower(), 3),
+            _CHECK_ORDER.get((row.get("verified") or "").lower(), 1), -s)
+
+
+def read_contacts(path: Path = CONTACTS_FILE) -> list[dict]:
+    if not path.exists():
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def merge_contacts(existing: list[dict], updates: list[dict],
+                   add_new: bool = True) -> list[dict]:
+    """Rows keyed by apollo_id. A non-empty value in an update replaces the
+    stored one; an empty value never erases what's there."""
+    by_id = {r["apollo_id"]: dict(r) for r in existing if r.get("apollo_id")}
+    for u in updates:
+        pid = u.get("apollo_id")
+        if not pid or (pid not in by_id and not add_new):
+            continue
+        row = by_id.setdefault(pid, {c: "" for c in CONTACT_COLUMNS})
+        for k in CONTACT_COLUMNS:
+            v = u.get(k)
+            if v not in (None, ""):
+                row[k] = str(v)
+    return sorted(by_id.values(), key=contact_rank)
+
+
+def save_contacts(rows: list[dict], path: Path = CONTACTS_FILE,
+                  email_path: Path = EMAIL_CONTACTS_FILE):
+    """Write every contact, and the ones with an email, best first."""
+    rows = sorted(rows, key=contact_rank)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for target, subset in ((path, rows), (email_path, [r for r in rows if r.get("email")])):
+        with open(target, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=CONTACT_COLUMNS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(subset)
+
+
+def update_contacts(updates: list[dict], add_new: bool = False,
+                    path: Path = CONTACTS_FILE,
+                    email_path: Path = EMAIL_CONTACTS_FILE) -> int:
+    """Fold judgement (fit, research, fact check, drafts) into the contact
+    files. Returns how many stored contacts the updates matched."""
+    existing = read_contacts(path)
+    known = {r["apollo_id"] for r in existing}
+    save_contacts(merge_contacts(existing, updates, add_new), path, email_path)
+    return sum(1 for u in updates if u.get("apollo_id") in known)
 
 
 # ── Ledgers ──────────────────────────────────────────────────────────
@@ -167,12 +335,13 @@ class FileLedger:
     def _read(self) -> dict:
         if self.path.exists():
             return json.loads(self.path.read_text(encoding="utf-8"))
-        return {"runs": [], "seen_ids": [], "seen_orgs": []}
+        return {"runs": [], "seen_ids": [], "seen_orgs": [], "skipped_orgs": []}
 
     async def load(self) -> LedgerState:
         d = self._read()
         return LedgerState(
-            seen_ids=set(d["seen_ids"]), seen_orgs=set(d["seen_orgs"]),
+            seen_ids=set(d["seen_ids"]),
+            seen_orgs=set(d["seen_orgs"]) | set(d.get("skipped_orgs", [])),
             credits_used=sum(r.get("credits_used", 0) for r in d["runs"]),
             last_segment=d["runs"][-1]["segment"] if d["runs"] else "")
 
@@ -182,6 +351,8 @@ class FileLedger:
         d["seen_ids"] = sorted(set(d["seen_ids"]) | set(run["seen_ids"]))
         d["seen_orgs"] = sorted(set(d["seen_orgs"])
                                 | {r["company"].lower() for r in rows if r["company"]})
+        d["skipped_orgs"] = sorted(set(d.get("skipped_orgs", []))
+                                   | set(run.get("skipped_orgs", [])))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(d, indent=2), encoding="utf-8")
 
@@ -216,14 +387,17 @@ class SheetLedger:
 
     async def load(self) -> LedgerState:
         d = await self._call({"action": "load"})
+        orgs = d.get("seen_orgs", []) + d.get("skipped_orgs", [])
         return LedgerState(seen_ids=set(d.get("seen_ids", [])),
-                           seen_orgs={o.lower() for o in d.get("seen_orgs", [])},
+                           seen_orgs={o.lower() for o in orgs},
                            credits_used=int(d.get("credits_used", 0)),
                            last_segment=d.get("last_segment", ""))
 
     async def record(self, run: dict, rows: list[dict]):
+        # Company names hold commas ("Example Holdings, LLC"), so "|" joins them.
         await self._call({"columns": ROW_COLUMNS, "rows": rows,
-                          "run": dict(run, seen_ids=",".join(run["seen_ids"]))})
+                          "run": dict(run, seen_ids=",".join(run["seen_ids"]),
+                                      skipped_orgs="|".join(run.get("skipped_orgs", [])))})
 
     async def push_angles(self, angles: dict[str, str]):
         await self._call({"angles": angles})
@@ -255,11 +429,15 @@ class FetchReport:
     def as_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items() if k != "rows"}
         d["prospects"] = len(self.rows)
+        # Which rows of the contact files this run added or refreshed.
+        d["new_ids"] = [r["apollo_id"] for r in self.rows if r.get("apollo_id")]
         return d
 
 
-async def _signals_for(state, company_ids: list[str]) -> dict[str, dict]:
-    """Latest HIRING_ROLE / OPEN_ROLES / TECH_STACK per company."""
+async def _signals_for(state, company_ids: list[str],
+                       keywords: list[str] | None = None) -> dict[str, dict]:
+    """Latest HIRING_ROLE / OPEN_ROLES / TECH_STACK per company. Hiring roles
+    are kept only when they name one of ``keywords``."""
     import aiosqlite
 
     out: dict[str, dict] = {cid: {} for cid in company_ids}
@@ -282,11 +460,49 @@ async def _signals_for(state, company_ids: list[str]) -> dict[str, dict]:
                     sig["open_roles"] = int(num or 0)
                 else:
                     sig["tech"] = text or ""
+    for sig in out.values():
+        if "hiring" in sig:
+            sig["hiring"] = relevant_roles(sig["hiring"], keywords or [])
     return out
 
 
+async def _search(apollo, seg: dict, led: LedgerState, limit: int) -> tuple[list[dict], int]:
+    """Up to ``limit`` new candidates for one segment, and how many people
+    were searched. Pages on (free) until every pick has the segment's first
+    title or the results run out, so title order beats Apollo's own order."""
+    titles = seg.get("titles", [])
+    people: list[dict] = []
+    for page in range(1, MAX_SEARCH_PAGES + 1):
+        res = await apollo.search_people(search_filters(seg), page=page)
+        batch = res.get("people") or []
+        people.extend(batch)
+        picks = choose_candidates(people, titles, led.seen_ids, led.seen_orgs, limit)
+        if len(batch) < 100 or (len(picks) >= limit
+                                and all(p["_rank"] == 0 for p in picks)):
+            break
+    picks = choose_candidates(people, titles, led.seen_ids, led.seen_orgs, limit)
+    return [dict(p, _segment=seg["key"]) for p in picks], len(people)
+
+
+def write_plan(groups: list[list[dict]], path: Path):
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=PLAN_COLUMNS)
+        w.writeheader()
+        for group in groups:
+            for p in group:
+                w.writerow({"segment": p["_segment"], "apollo_id": p["id"],
+                            "first_name": p.get("first_name", ""),
+                            "title": p.get("title", ""),
+                            "company": p["organization"]["name"],
+                            "title_rank": p["_rank"], "verdict": "", "reason": ""})
+
+
 async def run_fetch(state, config, segment: str = "auto", credits: int | None = None,
-                    dry_run: bool = False) -> FetchReport:
+                    dry_run: bool = False, plan: bool = False,
+                    from_plan: str = "") -> FetchReport:
+    """One fetch run. ``segment`` is a key, ``auto`` (the next in rotation) or
+    ``mix`` (all of them, credits shared in turn). ``plan`` writes candidates
+    for review and spends nothing; ``from_plan`` enriches a reviewed plan."""
     spec = load_segments()
     ledger = make_ledger()
     if isinstance(ledger, FileLedger) and os.getenv("GITHUB_ACTIONS"):
@@ -296,34 +512,61 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
                            stopped="SHEET_WEBHOOK_URL is not set; refusing to "
                                    "spend credits without the sheet ledger")
     led = await ledger.load()
-    seg = pick_segment(spec, segment, led.last_segment)
+    by_key = {s["key"]: s for s in spec["segments"]}
+    segs = (spec["segments"] if segment == "mix"
+            else [pick_segment(spec, segment, led.last_segment)])
     cap = int(spec.get("phase_credit_cap", 0))
     budget = credits if credits is not None else int(spec.get("per_run_credits", 10))
     left = max(0, cap - led.credits_used)
     budget = min(budget, left)
 
-    report = FetchReport(segment=seg["key"], credits_left=left,
-                         ledger=type(ledger).__name__)
+    report = FetchReport(segment="mix" if len(segs) > 1 else segs[0]["key"],
+                         credits_left=left, ledger=type(ledger).__name__)
     if budget <= 0:
         report.stopped = f"credit cap reached ({led.credits_used}/{cap} used)"
         return report
 
-    titles = seg.get("titles", [])
+    skipped: list[str] = []
+    if from_plan:
+        with open(from_plan, newline="", encoding="utf-8") as f:
+            groups, skipped = plan_picks(list(csv.DictReader(f)), list(by_key),
+                                         led.seen_ids, led.seen_orgs)
+        if not groups:
+            report.stopped = f"no rows marked {' or '.join(KEEP_VERDICTS)} in {from_plan}"
+            return report
+        report.segment = "mix" if len(groups) > 1 else groups[0][0]["segment"]
+        # Plan rows carry what enrichment needs, in the search result's shape.
+        groups = [[{"id": r["apollo_id"], "title": r["title"], "_segment": r["segment"],
+                    "_verdict": r["verdict"].strip().lower(),
+                    "_reason": (r.get("reason") or "").strip(),
+                    "organization": {"name": r["company"]}} for r in g] for g in groups]
+
     async with ApolloClient(apollo_key()) as apollo:
-        people: list[dict] = []
-        for page in range(1, MAX_SEARCH_PAGES + 1):
-            res = await apollo.search_people(search_filters(seg), page=page)
-            batch = res.get("people") or []
-            people.extend(batch)
-            picks = choose_candidates(people, titles, led.seen_ids, led.seen_orgs, budget)
-            if len(picks) >= budget or len(batch) < 100:
-                break
-        report.searched = len(people)
-        picks = choose_candidates(people, titles, led.seen_ids, led.seen_orgs, budget)
+        if not from_plan:
+            # A plan lists reserves for each segment's share; a run needs
+            # enough per segment to cover the whole budget if others run dry.
+            share = math.ceil(budget / len(segs))
+            limit = share * PLAN_RESERVE if plan else budget
+            groups = []
+            for seg in segs:
+                picks, searched = await _search(apollo, seg, led, limit)
+                report.searched += searched
+                groups.append(picks)
+        picks = interleave(groups)
         report.candidates = len(picks)
+
+        if plan:
+            EXPORT_DIR.mkdir(exist_ok=True)
+            write_plan(groups, PLAN_FILE)
+            report.csv_path = str(PLAN_FILE)
+            report.rows = [{"segment": p["_segment"], "title": p.get("title", ""),
+                            "company": p["organization"]["name"]}
+                           for g in groups for p in g]
+            return report
         if dry_run:
-            report.rows = [{"first_name": p.get("first_name", ""), "title": p.get("title", ""),
-                            "company": p["organization"]["name"]} for p in picks]
+            report.rows = [{"segment": p["_segment"], "first_name": p.get("first_name", ""),
+                            "title": p.get("title", ""),
+                            "company": p["organization"]["name"]} for p in picks[:budget]]
             return report
 
         enriched: list[tuple[dict, dict]] = []
@@ -343,6 +586,7 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     rows, company_ids = [], []
     for p, person in enriched:
+        seg = by_key[p["_segment"]]
         org = person.get("organization") or {}
         domain = domain_of(org.get("website_url") or org.get("primary_domain") or "")
         location = ", ".join(x for x in (org.get("city"), org.get("state"),
@@ -371,6 +615,7 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
             "country": person.get("country") or "",
             "hiring_roles": "", "open_roles": "", "tech_stack": "",
             "score": 0, "angle": "", "status": "new", "_company_id": company_id,
+            "fit": p.get("_verdict", ""), "fit_reason": p.get("_reason", ""),
         }
         rows.append(row)
 
@@ -387,7 +632,8 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
             await profile_companies(state, targets, config)
         except Exception as e:  # signals are a bonus, never a reason to lose rows
             logger.warning("fetch: profiling failed: %s", e)
-    signals = await _signals_for(state, company_ids)
+    signals = await _signals_for(state, company_ids,
+                                 role_keywords(getattr(config, "icp", None)))
 
     for row in rows:
         company_id = row.pop("_company_id")
@@ -395,7 +641,7 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
         row["hiring_roles"] = "; ".join(sig.get("hiring", [])[:5])
         row["open_roles"] = str(sig.get("open_roles", "")) if "open_roles" in sig else ""
         row["tech_stack"] = sig.get("tech", "")
-        row["score"] = score(row, seg)
+        row["score"] = score(row, by_key[row["segment"]], row["fit"])
         if row["email"]:
             await state.add_prospect(Prospect(
                 first_name=row["first_name"], last_name=row["last_name"],
@@ -410,28 +656,29 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     rows.sort(key=lambda r: r["score"], reverse=True)
     report.rows = rows
 
-    EXPORT_DIR.mkdir(exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    path = EXPORT_DIR / f"fetch-{stamp}-{seg['key']}.csv"
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=ROW_COLUMNS)
-        w.writeheader()
-        w.writerows(rows)
-    report.csv_path = str(path)
+    save_contacts(merge_contacts(read_contacts(), rows))
+    report.csv_path = str(CONTACTS_FILE)
 
-    run = {"ran_at": now, "segment": seg["key"], "searched": report.searched,
+    run = {"ran_at": now, "segment": report.segment, "searched": report.searched,
            "enriched": report.enriched, "credits_used": report.credits_used,
-           "prospects": len(rows), "seen_ids": seen_now}
+           "prospects": len(rows), "seen_ids": seen_now,
+           "skipped_orgs": sorted(set(skipped))}
     await ledger.record(run, rows)
     report.credits_left = left - report.credits_used
     return report
 
 
-async def push_angles(csv_path: str) -> int:
-    """Send the ``angle`` column of a fetch CSV to the sheet, keyed by apollo_id."""
+async def push_angles(csv_path: str = str(CONTACTS_FILE)) -> tuple[int, bool]:
+    """Send the ``angle`` column of the contacts file to the sheet, keyed by
+    apollo_id. When that's contacts_all.csv, first re-rank it and rewrite
+    contacts_with_email.csv from it, so hand edits reach both files.
+    Returns (angles found, whether a sheet received them)."""
+    if Path(csv_path).resolve() == CONTACTS_FILE.resolve():
+        save_contacts(read_contacts())
     with open(csv_path, newline="", encoding="utf-8") as f:
         angles = {r["apollo_id"]: r["angle"] for r in csv.DictReader(f)
                   if r.get("apollo_id") and r.get("angle")}
+    ledger = make_ledger()
     if angles:
-        await make_ledger().push_angles(angles)
-    return len(angles)
+        await ledger.push_angles(angles)
+    return len(angles), isinstance(ledger, SheetLedger) and bool(angles)
