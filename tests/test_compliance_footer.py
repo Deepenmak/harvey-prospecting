@@ -656,3 +656,73 @@ def test_opt_out_line_can_ask_in_hebrew():
     ):
         with pytest.raises(pydantic.ValidationError):
             ComplianceConfig(opt_out_line=bad)
+
+
+# ── Hebrew escalation ──
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    "העברתי את המייל לעורך הדין שלי.",
+    "עורכת הדין שלי תהיה איתכם בקשר.",
+    'העברתי לעו"ד.',
+    "עוֹרֵךְ דִּין יטפל בזה",                    # with vowel points
+    "‏עוד מייל אחד ואני אתבע אתכם.‏",  # direction marks around it
+    "אגיש נגדכם תביעה בתביעות קטנות.",
+    "תקבלו ממני תביעה משפטית.",
+    "ננקוט נגדכם בהליכים משפטיים.",
+    "ניפגש בבית המשפט.",
+    "זו הטרדה.",
+    "מדובר בהטרדה, וזה לא בסדר",
+    "אגיש עליכם תלונה במשטרה.",
+    "כבר שלחתי תלונה על ספאם.",
+    "זה בניגוד לחוק הספאם.",
+    "אפנה לרשות להגנת הפרטיות.",
+    "דבר פרסומת בלי הסכמה, פיצוי ללא הוכחת נזק.",
+    "סימנתי אתכם כספאם.",
+], ids=["my-lawyer", "my-lawyer-f", "acronym", "niqqud", "sue-you-rlm", "small-claims",
+        "lawsuit", "legal-action", "see-you-in-court", "harassment", "its-harassment",
+        "police-complaint", "spam-complaint", "spam-law", "privacy-authority",
+        "statutory-damages", "marked-as-spam"])
+async def test_hebrew_legal_threats_escalate_without_the_model(state, body):
+    status, prompts = await _reply(state, body)
+    assert status != "opted_out" and prompts == []  # no model call, no auto-reply
+    assert len(await state.get_conversations_by_status("needs_human")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    "אנחנו מגישים תביעות ביטוח כל יום, זה יעזור?",
+    "אגיש תביעה לחברת הביטוח ואחזור אליכם.",
+    "את התביעה עליכם להגיש דרך הקופה?",
+    "סליחה על ההטרדה, כמה זה עולה?",
+    "סליחה אם זה מהווה הטרדה, אבל מה המחיר?",
+    "עוד שאלה: יש חוזה?",
+    "המרפאה קרובה לבית המשפט, קל להגיע.",
+    "מה שמטריד אותי זה המחיר.",
+    "אנחנו מקפידים על הגנת הפרטיות של המטופלים.",
+    "המייל שלכם הגיע לי לספאם, אבל נשמע מעניין.",
+], ids=["insurance-claims", "claim-to-insurer", "you-must-file", "sorry-to-bother",
+        "if-its-a-bother", "one-more-question", "near-the-court", "what-bothers-me",
+        "patient-privacy", "landed-in-spam"])
+async def test_ordinary_hebrew_does_not_escalate(state, body):
+    status, prompts = await _reply(state, body)
+    assert status != "opted_out" and prompts  # the model read it
+
+
+@pytest.mark.asyncio
+async def test_a_hebrew_pitch_mentioning_lawyers_doesnt_escalate_when_quoted(state):
+    sent = "אנחנו עוזרים למשרדי עורכי דין למלא את היומן. נדבר?"
+    status, prompts = await _reply_after_sending(
+        state, "כן, בואו נדבר.\n\nב-יום ג׳ Harvey כתב:\n> " + sent, sent_bodies=[sent])
+    assert status != "opted_out" and prompts  # not escalated over our own "עורכי דין"
+
+
+@pytest.mark.asyncio
+async def test_a_hebrew_legal_threat_after_an_opt_out_goes_to_you(state):
+    pid = await seed_prospect(state, status="opted_out")
+    provider = FakeProvider()
+    provider.inbound = [InboundMessage(
+        provider_id="in1", from_email="jane@acme.com", subject="Re: hello there",
+        body="ביקשתי שתסירו אותי. עורכת הדין שלי תהיה בקשר.")]
+    await make_handler(state, provider)._run_native()
+    assert [c.prospect_id for c in await state.get_conversations_by_status("needs_human")] == [pid]
