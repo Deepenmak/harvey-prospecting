@@ -599,9 +599,9 @@ class Handler:
         keyword_text = _flat(their_text)
         stripped = strip_quoted_reply(reply_text) or reply_text
         reply_text = ours.remove(stripped).strip() or stripped
+        escalate = _escalates(keyword_text)
 
         if prospect.status == "opted_out":
-            escalate = _escalates(keyword_text)
             await self._record_after_opt_out(prospect, reply_text, campaign_id, escalate)
             return
 
@@ -619,11 +619,12 @@ class Handler:
             logger.debug(f"Handler: outbox cancel failed: {e}")
 
         # 1. Classify intent. Hard keyword checks run FIRST and override
-        # the LLM — opt-outs and legal threats must never be missed.
+        # the LLM — opt-outs and legal threats must never be missed. An
+        # opt-out that also threatens is both: honoured, and handed to you.
         opt_out = _opt_out_reason(their_text, reply_text)
         if opt_out:
             intent = "unsubscribe"
-        elif _escalates(keyword_text):
+        elif escalate:
             intent = "escalate"
         else:
             intent = await self._classify_intent(reply_text, prospect)
@@ -684,8 +685,10 @@ class Handler:
 
         # 3. Route based on intent
         if intent == "unsubscribe":
-            # Honor opt-outs ALWAYS. No reply, no future contact.
-            await self.state.update_conversation(convo.id, status="closed", stage="closed_lost")
+            # Honor opt-outs ALWAYS. No reply, no future contact. A legal
+            # threat or complaint in the same reply still goes to you.
+            await self.state.update_conversation(
+                convo.id, status="needs_human" if escalate else "closed", stage="closed_lost")
             await self.state.update_prospect_status(prospect.id, "opted_out")
             await self.state.log_action(
                 action_type="opt_out",
@@ -698,6 +701,17 @@ class Handler:
                     "conversation_id": convo.id,
                 },
             )
+            if escalate:
+                await self.state.log_action(
+                    action_type="escalation",
+                    agent="handler",
+                    details={"prospect_email": lead_email, "reply_preview": reply_text[:200]},
+                )
+                logger.warning(
+                    f"Handler: {lead_email} opted out with a complaint or legal threat. "
+                    "Suppressed permanently and ESCALATED for human review. No reply sent."
+                )
+                return
             logger.info(f"Handler: {lead_email} opted out. Suppressed permanently. No reply sent.")
             return
 

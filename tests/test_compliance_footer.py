@@ -726,3 +726,30 @@ async def test_a_hebrew_legal_threat_after_an_opt_out_goes_to_you(state):
         body="ביקשתי שתסירו אותי. עורכת הדין שלי תהיה בקשר.")]
     await make_handler(state, provider)._run_native()
     assert [c.prospect_id for c in await state.get_conversations_by_status("needs_human")] == [pid]
+
+
+# ── An opt-out that also threatens ──
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    "Stop emailing me. My attorney will be in touch.",
+    "תפסיקו לשלוח לי מיילים. עורכת הדין שלי תהיה בקשר.",
+], ids=["english", "hebrew"])
+async def test_an_opt_out_with_a_legal_threat_is_honoured_and_goes_to_you(state, body):
+    from tests.test_outbox_native import _logged
+    status, prompts = await _reply(state, body)
+    assert status == "opted_out" and prompts == []  # honoured, nothing drafted
+    [convo] = await state.get_conversations_by_status("needs_human")
+    assert convo.intent == "unsubscribe" and convo.stage == "closed_lost"
+    [opt_out] = await _logged(state, "opt_out")
+    assert opt_out["rule"] == "phrase" and opt_out["conversation_id"] == convo.id
+    assert len(await _logged(state, "escalation")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_plain_opt_out_is_closed_not_handed_to_you(state):
+    from tests.test_outbox_native import _logged
+    status, _ = await _reply(state, "תורידו אותי מהרשימה.")
+    assert status == "opted_out"
+    assert await state.get_conversations_by_status("needs_human") == []
+    assert await _logged(state, "escalation") == []
