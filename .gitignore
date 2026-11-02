@@ -41,6 +41,7 @@ Thumbs.db
 .claude/*
 !.claude/skills/
 !.claude/agents/
+!.claude/settings.json
 
 # Internal context (not for public repo)
 .context.md
