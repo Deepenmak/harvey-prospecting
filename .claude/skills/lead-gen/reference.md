@@ -52,6 +52,7 @@ contents are folded into those files.
     "apollo_id": "abc123",
     "company": "Example Mutual",
     "intent": "high",
+    "buying_state": "open",
     "signals": [
       {"fact": "Announced a claims modernization program", "url": "https://example.com/news/1", "date": "2026-06-02"}
     ],
@@ -66,6 +67,12 @@ contents are folded into those files.
 AI or digital leader in the last 12 months), `medium` (a relevant trigger such
 as M&A, rapid growth, a regulatory deadline or a modernization program),
 `low` (nothing found) or `unknown` (couldn't research).
+
+`buying_state` is `open`, `partly_solved`, `solved`, `builds_own` or `unknown`
+(defined in `optywise_icp.md`). `apply_review.py` lowers intent to fit it:
+`partly_solved` to medium at most, `solved` and `builds_own` to low. It also
+sets `account_tier` to `A` for fit `a`, intent `high`, state `open` and a fact
+check of pass or partial. The tier is advice and never spends a credit.
 
 ### verify.json (from lead-verifier)
 
@@ -82,4 +89,21 @@ as M&A, rapid growth, a regulatory deadline or a modernization program),
 
 ```json
 [{"apollo_id": "abc123", "subject": "claims after storms", "body": "Plain text, under 75 words."}]
+```
+
+### briefs.json (from call-prepper)
+
+```json
+[{"apollo_id": "abc123", "brief": "Plain text, under 450 words."}]
+```
+
+### deals.json (from proposal-writer, with the notes added by the proposal skill)
+
+```json
+[{
+  "apollo_id": "abc123",
+  "call_notes": "The founder's notes, word for word.",
+  "deal_check": ["known: budget sits with the COO", "missing: approval path"],
+  "proposal": "Plain text, under 500 words, with [to confirm] for anything unknown."
+}]
 ```

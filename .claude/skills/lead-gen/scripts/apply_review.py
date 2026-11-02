@@ -2,7 +2,7 @@
 (exports/contacts_all.csv and exports/contacts_with_email.csv), which
 stay ranked best first. Nothing new is written per run.
 
-Usage: apply_review.py [--research F] [--verify F] [--drafts F]
+Usage: apply_review.py [--research F] [--verify F] [--drafts F] [--briefs F] [--deals F]
 
 Each defaults to exports/work/<name>.json when that file exists. Shapes are
 in ../reference.md. A value that's empty in the JSON never erases a stored one.
@@ -13,7 +13,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from harvey.fetch import EXPORT_DIR, read_contacts, update_contacts
+from harvey.fetch import EXPORT_DIR, capped_intent, read_contacts, update_contacts
 
 WORK = EXPORT_DIR / "work"
 
@@ -37,6 +37,8 @@ def main() -> None:
     ap.add_argument("--research", default="")
     ap.add_argument("--verify", default="")
     ap.add_argument("--drafts", default="")
+    ap.add_argument("--briefs", default="")
+    ap.add_argument("--deals", default="")
     a = ap.parse_args()
 
     updates: dict[str, dict] = {}
@@ -46,7 +48,8 @@ def main() -> None:
 
     for e in _load(a.research, "research"):
         u = up(e["apollo_id"])
-        u["intent"] = e.get("intent", "")
+        u["buying_state"] = e.get("buying_state", "")
+        u["intent"] = capped_intent(e.get("intent", ""), u["buying_state"])
         u["signals"] = _joined(
             [f"{s.get('fact', '')} ({s.get('url', '')}{', ' + s['date'] if s.get('date') else ''})"
              for s in e.get("signals", [])]
@@ -59,6 +62,13 @@ def main() -> None:
     for e in _load(a.drafts, "drafts"):
         u = up(e["apollo_id"])
         u["draft_subject"], u["draft_body"] = e.get("subject", ""), e.get("body", "")
+    for e in _load(a.briefs, "briefs"):
+        up(e["apollo_id"])["call_brief"] = e.get("brief", "")
+    for e in _load(a.deals, "deals"):
+        u = up(e["apollo_id"])
+        u["call_notes"] = e.get("call_notes", "")
+        u["deal_check"] = _joined(e.get("deal_check", []))
+        u["proposal_draft"] = e.get("proposal", "")
 
     if not updates:
         print("Nothing to apply.")

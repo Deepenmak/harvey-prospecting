@@ -75,11 +75,34 @@ Fix before Europe outreach: the site only claims the US and Canada and only ment
 - Government and public sector.
 - Consumer-only businesses with no regulated or document-heavy workflow.
 
+Looks good on paper but rarely closes. These are starting rules, so check them against the skip reasons after each run:
+
+- Companies whose core product is AI or automation for the workflow we would fix, even if they also run it as a service: they build it themselves. Outsourcers, TPAs and billing firms that run the workflow for clients without selling their own AI for it stay in.
+- Subsidiaries whose technology decisions sit with the parent group. Mark them `b` when the parent's role is unclear.
+- Companies being acquired, in distress or under a spending freeze.
+- A contact whose remit is outside the segment's market.
+
 ## 7. Signals Harvey should look for
 
 - **Hiring:** roles that mean in-market now. Machine Learning Engineer, AI Engineer, Applied AI, LLM Engineer, Head of AI, Forward Deployed Engineer, MLOps, Automation Engineer, Intelligent Automation, Claims Automation, Prior Authorization. Harvey reads Greenhouse, Lever, Ashby and Workable boards for these, and the open-roles count doubles as a size proxy.
 - **Funding:** a raise in the last 12-18 months, for the startup tier.
 - **Tech stack** to add later as custom signals: Guidewire or Duck Creek (insurance), Epic, athenahealth or Waystar (RCM), nCino or Jack Henry (banking).
+
+### Reading the buying state
+
+AI news alone doesn't make a buyer. It can just as easily mean the problem is solved. Judge the workflow we would fix, using these states:
+
+| State | Means | Intent allowed |
+|---|---|---|
+| `open` | The need is visible and nothing covers it: a stalled or slow pilot, a modernization program with no vendor named for this workflow, a current hire for it, a new AI or digital leader | high, medium or low |
+| `partly_solved` | A vendor or in-house tool covers this workflow, but another one in the same business is still open | medium at most |
+| `solved` | A vendor or in-house system is live across the workflow, and nothing else open was found | low |
+| `builds_own` | Their core product is AI for this workflow, or they run a large in-house AI team | low |
+| `unknown` | No evidence either way | high, medium or low |
+
+Strongest signals first, when choosing what to lead with: a stalled pilot or a failed vendor project, a current AI or automation hire for the workflow, a new AI or digital leader in the last 12 months, a dated modernization program, then a regulatory deadline, M&A, funding or fast growth.
+
+An account is tier `A`, worth 2-3 contacts, when fit is `a`, intent is `high`, the state is `open` and the facts passed checking. Harvey sets this itself, and it never spends credits by itself.
 
 ## 8. How to source them
 

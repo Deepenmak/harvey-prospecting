@@ -1,13 +1,15 @@
 """harvey fetch: candidate choice and segment rotation (no network)."""
 
 import asyncio
-
 import csv
+import importlib.util
+import json
+import sys
 
-from harvey.fetch import (FileLedger, choose_candidates, domain_of, email_status,
-                          interleave, merge_contacts, pick_segment, plan_picks,
-                          read_contacts, relevant_roles, save_contacts, score,
-                          title_priority, update_contacts)
+from harvey.fetch import (FileLedger, account_tier, capped_intent, choose_candidates,
+                          domain_of, email_status, interleave, merge_contacts,
+                          pick_segment, plan_picks, read_contacts, relevant_roles,
+                          save_contacts, score, title_priority, update_contacts)
 
 TITLES = ["Head of AI", "VP Claims", "Chief Technology Officer"]
 
@@ -141,6 +143,81 @@ def test_contact_files_rank_best_first_and_split_on_email(tmp_path):
                         path=all_path, email_path=email_path)
     assert n == 1
     assert [r["apollo_id"] for r in read_contacts(all_path)] == ["1", "3", "2"]
+
+
+def test_buying_state_caps_intent():
+    assert capped_intent("high", "solved") == "low"
+    assert capped_intent("high", "builds_own") == "low"
+    assert capped_intent("medium", "SOLVED") == "low"
+    assert capped_intent("high", "partly_solved") == "medium"
+    assert capped_intent("low", "partly_solved") == "low"
+    assert capped_intent("high", "open") == "high"
+    assert capped_intent("high", "unknown") == "high"
+    assert capped_intent("high", "") == "high"
+    assert capped_intent("unknown", "solved") == "unknown"
+
+
+def test_tier_a_needs_fit_intent_open_need_and_checked_facts():
+    good = {"fit": "a", "intent": "high", "buying_state": "open", "verified": "pass"}
+    assert account_tier(good) == "A"
+    assert account_tier({**good, "verified": "partial"}) == "A"
+    for k, v in (("fit", "b"), ("intent", "medium"), ("buying_state", "solved"),
+                 ("verified", "fail"), ("verified", "")):
+        assert account_tier({**good, k: v}) == ""
+
+
+def test_saved_tier_follows_the_row_and_old_files_still_load(tmp_path):
+    all_path, email_path = tmp_path / "all.csv", tmp_path / "email.csv"
+    # A file written before the new columns existed.
+    all_path.write_text("apollo_id,fit,intent,verified\n1,a,high,pass\n", encoding="utf-8")
+    update_contacts([{"apollo_id": "1", "buying_state": "open", "call_brief": "Line one\nLine two"}],
+                    path=all_path, email_path=email_path)
+    row = read_contacts(all_path)[0]
+    assert row["account_tier"] == "A" and row["call_brief"] == "Line one\nLine two"
+    # The tier is derived, so it drops when the facts stop holding.
+    update_contacts([{"apollo_id": "1", "verified": "fail"}], path=all_path, email_path=email_path)
+    assert read_contacts(all_path)[0]["account_tier"] == ""
+
+
+def _load_script(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_apply_review_caps_intent_and_folds_briefs_and_deals(tmp_path, monkeypatch):
+    mod = _load_script(".claude/skills/lead-gen/scripts/apply_review.py", "apply_review")
+    research = tmp_path / "research.json"
+    research.write_text(json.dumps([{"apollo_id": "1", "intent": "high", "buying_state": "solved"}]))
+    briefs = tmp_path / "briefs.json"
+    briefs.write_text(json.dumps([{"apollo_id": "2", "brief": "A brief"}]))
+    deals = tmp_path / "deals.json"
+    deals.write_text(json.dumps([{"apollo_id": "3", "call_notes": "Notes", "proposal": "Draft",
+                                  "deal_check": ["known: budget", "missing: approval path"]}]))
+    got = {}
+    monkeypatch.setattr(mod, "WORK", tmp_path / "none")
+    monkeypatch.setattr(mod, "update_contacts", lambda ups: got.update({u["apollo_id"]: u for u in ups}) or len(ups))
+    monkeypatch.setattr(mod, "read_contacts", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["apply_review.py", "--research", str(research),
+                                      "--briefs", str(briefs), "--deals", str(deals)])
+    mod.main()
+    assert got["1"]["intent"] == "low" and got["1"]["buying_state"] == "solved"
+    assert got["2"]["call_brief"] == "A brief"
+    assert got["3"]["call_notes"] == "Notes" and got["3"]["proposal_draft"] == "Draft"
+    assert got["3"]["deal_check"] == "known: budget | missing: approval path"
+
+
+def test_weekly_stats_count_per_segment():
+    mod = _load_script(".claude/skills/weekly-review/scripts/weekly_stats.py", "weekly_stats")
+    stats = mod.segment_stats([
+        {"segment": "s1", "fit": "a", "intent": "high", "buying_state": "open", "account_tier": "A"},
+        {"segment": "s1", "fit": "b", "intent": "low", "buying_state": "solved", "verified": "fail"},
+        {"segment": "s2"},
+    ])
+    assert stats["s1"] == {"leads": 2, "fit_a": 1, "high_intent": 1, "open_need": 1,
+                           "tier_a": 1, "check_failed": 1}
+    assert stats["s2"]["leads"] == 1 and stats["s2"]["fit_a"] == 0
 
 
 def test_cloud_run_refuses_without_a_restored_ledger(tmp_path, monkeypatch):

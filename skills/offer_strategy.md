@@ -142,3 +142,19 @@ When a prospect asks about pricing before you've qualified them:
 2. Frame it with context: "Plans start at $X/mo, depending on [variable]. Most teams your size are on the [tier] plan."
 3. Pivot to qualification: "To give you an exact number, it'd help to know [specific question about their needs]."
 4. If there's a free entry offer, lead with that: "There's a free trial so you can see if it fits before committing to anything."
+
+## Optywise's Offers
+
+These override the general examples above.
+
+**Primary offer:** one six-week PRISM cycle for one use case, with a senior embedded pod, a fixed-scope SOW and full client ownership of the code. Typically $60-150K, priced by outcome.
+
+**Entry offer:** not decided yet. Until it's written here, never offer a free audit, pilot, assessment, discount or guarantee. Ask only for a conversation.
+
+When an entry offer is set, it must state:
+- The problem it tests
+- Success criteria agreed with the buyer before it starts
+- What's in and out of scope
+- The timeline
+- The decision made at the end, and what happens next
+- The price, or that it's free

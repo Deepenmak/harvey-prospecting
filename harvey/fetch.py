@@ -71,13 +71,19 @@ ROW_COLUMNS = [
     "open_roles", "tech_stack", "score", "angle", "status",
 ]
 # Judgement added to a contact after it's fetched: the plan reviewer's fit,
-# web research, its fact check, and a first-touch draft (never sent).
-REVIEW_COLUMNS = ["fit", "fit_reason", "intent", "signals", "red_flags",
-                  "verified", "verify_notes", "draft_subject", "draft_body"]
+# web research, its fact check, a first-touch draft (never sent), and what
+# the call-prep and proposal skills write once a lead turns into a meeting.
+REVIEW_COLUMNS = ["fit", "fit_reason", "intent", "buying_state", "account_tier",
+                  "signals", "red_flags", "verified", "verify_notes",
+                  "draft_subject", "draft_body", "call_brief", "call_notes",
+                  "deal_check", "proposal_draft"]
 CONTACT_COLUMNS = ROW_COLUMNS + REVIEW_COLUMNS
 _FIT_ORDER = {"a": 0, "b": 1, "skip": 3}
 _INTENT_ORDER = {"high": 0, "medium": 1, "low": 2}
 _CHECK_ORDER = {"pass": 0, "partial": 1, "fail": 2}
+# The highest intent a buying state allows. A company that already solved the
+# workflow isn't a hot lead however much AI news it has.
+_INTENT_CAP = {"solved": "low", "builds_own": "low", "partly_solved": "medium"}
 
 # Apollo's seniority vocabulary → Harvey's.
 SENIORITY = {"owner": "c_suite", "founder": "c_suite", "c_suite": "c_suite",
@@ -268,6 +274,25 @@ def contact_rank(row: dict) -> tuple:
             _CHECK_ORDER.get((row.get("verified") or "").lower(), 1), -s)
 
 
+def capped_intent(intent: str, buying_state: str) -> str:
+    """The researcher's intent, lowered to what the buying state allows."""
+    cap = _INTENT_CAP.get((buying_state or "").strip().lower())
+    if cap and _INTENT_ORDER.get((intent or "").strip().lower(), 3) < _INTENT_ORDER[cap]:
+        return cap
+    return intent
+
+
+def account_tier(row: dict) -> str:
+    """"A" marks an account worth 2-3 contacts: strong fit, high intent, an
+    open need, and facts that held up. It's advice: fetch stays at one person
+    per company, so it never spends a credit."""
+    def get(k):
+        return (row.get(k) or "").strip().lower()
+    return "A" if (get("fit") == "a" and get("intent") == "high"
+                   and get("buying_state") == "open"
+                   and get("verified") in ("pass", "partial")) else ""
+
+
 def read_contacts(path: Path = CONTACTS_FILE) -> list[dict]:
     if not path.exists():
         return []
@@ -295,7 +320,8 @@ def merge_contacts(existing: list[dict], updates: list[dict],
 def save_contacts(rows: list[dict], path: Path = CONTACTS_FILE,
                   email_path: Path = EMAIL_CONTACTS_FILE):
     """Write every contact, and the ones with an email, best first."""
-    rows = sorted(rows, key=contact_rank)
+    rows = sorted(({**r, "account_tier": account_tier(r)} for r in rows),
+                  key=contact_rank)
     path.parent.mkdir(parents=True, exist_ok=True)
     for target, subset in ((path, rows), (email_path, [r for r in rows if r.get("email")])):
         with open(target, "w", newline="", encoding="utf-8") as f:
