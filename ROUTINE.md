@@ -11,9 +11,13 @@ earlier runs spent or fetched.
 ## Task settings (claude.ai/code/routines)
 
 - Repository: `Deepenmak/harvey-prospecting`
-- Environment: network access **Full** (profiling and research read each
-  company's own website); setup script `pip install -e .`; variable
-  `APOLLO_HARVEY_KEY=<Apollo API key>`. Don't set `SHEET_WEBHOOK_URL`.
+- Environment: network access **Full** (Apollo, plus profiling and research
+  read each company's own website); variable
+  `APOLLO_HARVEY_KEY=<Apollo API key>`. Don't set `SHEET_WEBHOOK_URL`. No
+  setup script needed: the repo's SessionStart hook (`.claude/settings.json`)
+  runs `scripts/cloud_setup.sh` at startup, which installs Harvey with
+  `python -m pip` (the image's bare `pip` belongs to a different Python) and
+  reports a missing key or a blocked Apollo before the prompt is read.
 - Schedule: weekdays, 07:00 Asia/Kolkata (cloud tasks run at most hourly).
 - Connectors: none needed. Add Gmail only if you want a summary email.
 
@@ -21,9 +25,19 @@ earlier runs spent or fetched.
 
 ```
 You are running Optywise's scheduled lead fetch with Harvey, unattended:
-nobody will answer questions, so never wait for input. Python is `python`
-(the setup script installed Harvey). The dashboard is
-https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
+nobody will answer questions, so never wait for input. Python is `python`.
+The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
+
+0. Setup ran at session start (scripts/cloud_setup.sh); its "Cloud setup"
+   lines are in your context. If it reported a missing key or a blocked
+   Apollo, stop and report that. If Harvey isn't importable, run
+   `bash scripts/cloud_setup.sh` once with CLAUDE_CODE_REMOTE set; if it
+   still fails, stop and report it. Never print the key. Then prove the
+   spend path works before any credits move:
+   `python -c "import harvey.fetch, httpx"` and
+   `python .claude/skills/lead-gen/scripts/dashboard_sync.py --help` must both
+   succeed. If either fails, stop: a run that can't save its ledger in step 3
+   would spend credits that the next run forgets and spends again.
 
 1. Restore. With ArtifactData `get` read `datasets/contacts` and
    `datasets/runs` on the dashboard; each has `source.url` `/_blob/<id>`.
