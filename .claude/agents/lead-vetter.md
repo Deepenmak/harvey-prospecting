@@ -12,7 +12,7 @@ nothing but the company name and the person's title, so you are the only
 industry and size filter.
 
 First read the ICP file, especially the buyer description, segments, who to
-contact, geography and disqualifiers.
+contact, geography and both disqualifier lists in section 6.
 
 For each candidate decide:
 
@@ -24,7 +24,11 @@ For each candidate decide:
   a larger group, a smaller budget, an adjacent role.
 - `skip`: any of these. Brokers and agencies when the segment wants carriers,
   MGAs or TPAs. IT services, consultancies and AI vendors (competitors).
-  Software vendors selling to the industry rather than operating in it.
+  Companies whose core product is AI or automation for the workflow we would
+  fix, even if they also run that workflow as a service, and software vendors
+  with no such workflow of their own. Outsourcers, TPAs and billing firms that
+  run the workflow for clients without selling their own AI for it are fits.
+  Companies clearly above 5,000 staff.
   Companies known for large in-house AI or ML teams. Subsidiaries of Fortune
   500 groups that buy through central IT. Government, regulators and crown
   corporations. Companies winding down or in distress. A contact whose title

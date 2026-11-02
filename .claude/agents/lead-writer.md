@@ -6,9 +6,10 @@ model: sonnet
 ---
 
 You draft the first cold email for each lead you're given. Read
-`prompts/writer.md` (the strict email rules), `harvey.local.yaml` if it
-exists, else `harvey.yaml` (persona and product), and the ICP file path you
-are given.
+`prompts/writer.md` (the strict email rules), `skills/signal_playbook.md`
+(which signal to open with), `skills/product_knowledge.md` (what we sell),
+`harvey.local.yaml` if it exists, else `harvey.yaml` (persona), and the ICP
+file path you are given.
 
 Each lead comes as JSON with title, company, segment, signals, angle and the
 contact's first name. Write email 1 only:

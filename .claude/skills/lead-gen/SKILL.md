@@ -30,13 +30,15 @@ The lasting record is the **Optywise Leads** dashboard
 (https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4): its `contacts.json` and
 `runs.json` hold every contact and the ledger. `scripts/dashboard_sync.py`
 moves them both ways; ROUTINE.md has the restore and upload steps. In a cloud
-run, restore before Phase 0 and upload after Phase 7. On the laptop, upload
+run, restore before Phase 0 and upload after Phase 7. On the laptop, restore
+before Phase 0 too (a stale copy would drop rows from the dashboard), and upload
 after Phase 7 so the dashboard stays current.
 
 Fit, research, fact checks and drafts are columns on each contact's row
-(fit, fit_reason, intent, signals, red_flags, verified, verify_notes, angle,
-draft_subject, draft_body), so a lead's whole story is in one place. Never
-create another export file.
+(fit, fit_reason, intent, buying_state, account_tier, signals, red_flags,
+verified, verify_notes, angle, draft_subject, draft_body), so a lead's whole
+story is in one place. The call-prep and proposal skills add call_brief,
+call_notes, deal_check and proposal_draft. Never create another export file.
 
 ## Hard rules
 
@@ -86,7 +88,8 @@ Free search shows only the company name, so this phase is the industry filter.
 
 - Group plan rows by segment. Spawn one `lead-vetter` subagent per segment,
   all in one message so they run in parallel. Under 15 rows in total, vet
-  them yourself instead: a subagent costs more than it saves.
+  them yourself instead: a subagent costs more than it saves. Read
+  `.claude/agents/lead-vetter.md` first and apply its rubric exactly.
 - Give each vetter: the ICP file path, the segment's key, label and
   locations from `segments.yaml`, and its rows as JSON (apollo_id, title,
   company, title_rank). Nothing else; the agent definition holds the rubric.
@@ -117,9 +120,10 @@ filters, and mid-size carriers, banks and RCM firms rarely publish a job
 board Harvey can read.
 
 - Take the `new_ids` rows from `exports/contacts_all.csv`. Scale to the batch:
-  up to 6 leads, research yourself or with one `lead-researcher`. Above that,
-  one researcher per segment (at most 5 agents, about 5-8 leads each),
-  spawned in one message.
+  up to 6 leads, research yourself or with one `lead-researcher` (if yourself,
+  read `.claude/agents/lead-researcher.md` first and apply its rubric exactly).
+  Above that, one researcher per segment (at most 5 agents, about 5-8 leads
+  each), spawned in one message.
 - Give each researcher its leads as JSON: apollo_id, company, domain, title,
   segment, industry, employees, city, country, fit, fit_reason. Leave out
   emails and LinkedIn URLs; the research is about the company, not the person.
@@ -137,7 +141,8 @@ passed, or from title and company alone.
 
 `PY S/apply_review.py` applies whatever is in `exports/work/` (research,
 verify, drafts) to the matching rows and re-ranks both files: fit, then
-intent, then the fact check, then score. Then upload `contacts.json` and
+intent, then the fact check, then score. It lowers intent to fit the buying
+state and marks tier A accounts. Then upload `contacts.json` and
 `runs.json` to the dashboard (ROUTINE.md, step 3).
 
 ## Phase 8: drafts (only with --drafts)
@@ -151,8 +156,9 @@ the Outbox.
 ## Report to the user
 
 Plain prose, short. Credits spent and left; new contacts per segment; verified
-email rate; how many show real intent; the top 10 new leads with one line
-each on why they'd buy; companies skipped and why (grouped); problems and
+email rate; how many show real intent and an open need; any tier A accounts;
+the top 10 new leads with one line each on why they'd buy; companies skipped
+and why (grouped); problems and
 concrete changes to `segments.yaml` or the ICP. Point to
 `exports/contacts_with_email.csv`.
 
