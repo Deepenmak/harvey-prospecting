@@ -3,7 +3,7 @@ pattern cache that no longer gets stuck on a default guess."""
 
 import pytest
 
-import harvey.integrations.email_finder as ef
+import sellbird.integrations.email_finder as ef
 
 
 # ── email patterns from published addresses ──
@@ -195,7 +195,9 @@ async def test_hunter_errors_are_transient(monkeypatch, status):
         async def __aexit__(self, *a):
             return False
 
-        async def get(self, url, params=None):
+        async def get(self, url, params=None, headers=None):
+            assert "api_key" not in (params or {})      # the key travels in a header
+            assert (headers or {}).get("X-API-KEY") == "k"
             return Resp()
 
     monkeypatch.setattr(ef.httpx, "AsyncClient", Client)

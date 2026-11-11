@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to Harvey. Dates are release dates; the format follows
+Notable changes to Sellbird, called Harvey until 0.4.0. Dates are release dates; the format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely and versions
 follow [semver](https://semver.org/), with the caveat that Harvey is pre-1.0 and
 minor versions can still change behaviour.
@@ -9,12 +9,276 @@ minor versions can still change behaviour.
 
 ### Added
 
+- **`writer.require_tip: true` skips prospects with nothing to build a tip
+  on.** A first email is meant to name one concrete thing the sender would
+  change; with no finding about the company, the draft could only say it had no
+  advice. With the option on, the Writer writes only for a prospect with a site
+  finding, a startup fact, a signal or the Scout's notes, and marks the others
+  `no_tip` (not left `new`, which makes the heartbeat retry them every cycle).
+  The dashboard shows them as "Nothing to write about yet", `sellbird status`
+  counts them, and `sellbird retry-writes --no-tip` puts them back in line. Off by default. The company's location
+  is also in the Writer's facts now.
+- **An Italian `compliance.opt_out_line` passes validation.** "Non ti
+  interessa? Rispondi pure e non ti scriverò più." is accepted, like the
+  English, Spanish and Hebrew lines already were, so an Italian sender no
+  longer needs a bilingual footer. A sign-off like "A presto!" is still
+  refused. Italian replies are still read by the model, not by rule.
+- **`channels.email.follow_ups: false` sends no follow-ups.** A campaign then
+  stages only its first email on Gmail, Microsoft and SMTP, so steps 2 and 3
+  can't go to someone who never answered. Replies are read and answered as
+  before. On by default, so nothing changes unless you turn it off.
+
+### Changed
+
+- **The writer sees what Sellbird read off a company's own site.** The free
+  homepage signals (no structured data, a site untouched for six months, a very
+  small sitemap, AI crawlers blocked) were collected but
+  never reached the writer's prompt, so an email asked to name one concrete
+  thing to change had nothing true to name and said it hadn't looked. Findings
+  that are true now go in as fact lines, each saying how it was found and that
+  the check can miss things; a signal checked and found fine is left out. "No
+  online booking" is not passed on: a homepage read misses widgets that load
+  late, and it called a bookable business unbookable too often.
+  Those findings come from one page and can be wrong, so `writer.site_facts:
+  false` turns them off, and `CLAUDE.md` and the approval guide now tell
+  Claude to offer a browser check of each draft's claims before the user
+  approves.
+- **The cold-email check takes a sender based in any of Precleared's
+  fourteen countries.** `compliance.precleared.sender_country` accepts GB, US,
+  CA, DE, FR, AU, IE, NL, ES, IT, LV, AE, EG and QA (`UK`, `USA` and `UAE` are
+  read as their codes), where it took only GB or US; `sellbird setup` asks for
+  a two-letter code and lists them when the answer isn't one. A sender whose
+  timezone is Europe/London is told the check is recommended for them and
+  offered GB as their country; it still waits for their yes. The docs say a
+  new key's 14 days at 100 checks a day start at its first check.
+- Seeding the signal catalog writes only a signal that is missing or whose catalog text changed. The dashboard seeds on every Today load, so this was a write per signal on every page view.
+- **The opt-out line takes any wording.** `compliance.opt_out_line` no longer
+  has to ask for a keyword: "Not interested? Just let me know and I won't email
+  you again." is the new default. Clear phrases are still caught by rule, and
+  the model reads every other reply for a request to stop. The line must still
+  say the emails can stop, however it's worded, so a sign-off like "Cheers!" is
+  refused; `""` leaves the line off on purpose. A link or an email address is
+  still refused.
+- **An `unknown` answer from the cold-email check holds the email instead of
+  failing it.** Precleared answers `unknown` when a fact can't be established,
+  usually the recipient's country, sometimes a register that was too slow.
+  That email now waits in the Outbox with what would settle it (set
+  `prospect_country`, or give the company a location or number) and is asked
+  about again, after six hours and then after a day; the third unknown on the
+  same facts fails it as before. Rejecting or sending the email clears the
+  note, as for an address the check couldn't reach.
+
+### Security
+
+- **Autopilot holds phone numbers and money requests.** An email nobody
+  approved now waits in the Outbox when it gives a phone number that isn't
+  yours (`channels.email.phone_numbers`, or one in your postal address) or
+  asks the reader to send money (wire or bank transfer, IBAN, crypto, gift
+  cards and the like), as it already did for links to domains that aren't
+  yours. A planted "call this number instead" can't go out on its own.
+- **Training reads your website as data.** The pages `sellbird train` crawls
+  are fenced as untrusted text, like replies and research already were, so
+  a comment or review on your site can't steer what training writes into
+  every later email.
+
+### Added
+
+- **Owners on French-language sites.** Finding the decision maker now reads
+  Québec French: propriétaire, président(e), PDG, président-directeur
+  général, fondateur/fondatrice, directeur/directrice général(e) and
+  associé(e), with or without accents. A feminine title satisfies its
+  masculine ICP entry ("Présidente" for "Président"), and an ICP written
+  only in French still targets the owner. Sentences such as "fondée par…",
+  "notre président et fondateur, …" and "… est propriétaire de l'entreprise"
+  are read, names with accents and hyphens (Marie-Ève, Côté) count as
+  names, and the site's "Équipe", "À propos" and "Nous joindre" pages are
+  followed. Before, these sites fell back to the published info@ address.
+- **French opt-outs.** `compliance.opt_out_line` accepts French wording ("Pas intéressé? Répondez-moi simplement et je ne vous écrirai plus."), with or without accents; before, a French line failed validation and the whole config wouldn't load. Replies saying "non merci", "ARRÊT", "désabonnez-moi", "ne m'écrivez plus" or "pas intéressé" are caught by rule like the English, Hebrew and Spanish ones, and "Envoyé de mon iPhone" no longer hides a bare opt-out.
+- **A menu-bar app.** `sellbird tray` (macOS menu bar, Windows tray)
+  starts the dashboard when needed, starts and stops Sellbird, pauses and
+  resumes sending and opens the dashboard unlocked. `sellbird autostart
+  install` starts it at login. See "The menu-bar app" in
+  [docs/configuration.md](docs/configuration.md).
+- **Several sending inboxes.** Besides the main mailbox, connect Gmail,
+  Microsoft 365 or SMTP inboxes you already own with
+  `sellbird inboxes connect`. Their sign-ins and passwords live in the
+  system keychain. Each new thread goes to the inbox with the most room;
+  follow-ups and replies leave from the thread's own inbox. Each inbox has
+  its own daily cold cap (`channels.email.per_inbox_daily_cap`, or your own
+  number) and warmup ramp, and can be paused, renamed, removed or limited
+  to some campaigns. Replies are read from every inbox. With one inbox
+  nothing changes. The dashboard's Inboxes tab shows them, opens each one
+  to pause, cap, rename or remove it, and adds one (a Gmail or Microsoft
+  sign-in in your browser, or an SMTP password that goes straight to your
+  keychain). Your coding agent can list them and pause one, never add or
+  remove one. See "Several sending inboxes" in
+  [docs/configuration.md](docs/configuration.md).
+- **An MCP server for your coding agent.** `sellbird mcp install` adds
+  Sellbird to Claude Code (or Codex), showing the change first. The agent
+  reads everything Sellbird knows, estimates discovery costs and can pause
+  sending, through the running dashboard with its own token
+  (`data/agent-token`). Every approval, setting, key, purchase and resume
+  stays yours: the agent's token reaches only a short allowlist of routes.
+  An extension can add tools and open its own routes to the agent. See
+  "Your coding agent (MCP)" in [docs/configuration.md](docs/configuration.md).
+- **Suppressions.** Addresses and whole domains Sellbird never emails,
+  kept in the database: an opt-out or a bounce adds the address, and
+  `sellbird suppressions` lists, adds and removes them. A suppressed domain
+  covers its subdomains. Nothing suppressed is staged, sent, or uploaded to
+  Instantly. Undoing someone's opt-out lifts its suppression too.
+  `compliance.do_not_contact` stays the hand-kept list in `sellbird.yaml`.
+- **Send rules and headers for extensions.** An extension can hold or cancel
+  an email after Sellbird's own checks, and add headers such as
+  `List-Unsubscribe`. An email that needs headers its inbox can't carry
+  waits rather than going out without them. See [docs/extensions.md](docs/extensions.md).
+- **Mail providers take who they send as, and where their sign-in lives.**
+  Gmail, Microsoft 365 and SMTP accept an identity (address and name; the
+  persona by default), Gmail and Microsoft a token source (the token file by
+  default) and an httpx transport, and SMTP its own server settings, so a
+  caller can connect more than one inbox. Signing in as a different account
+  than the inbox being connected saves nothing.
+- **Extensions.** A separate package can add dashboard routes, steps that
+  run each heartbeat cycle and `sellbird` subcommands through the
+  `sellbird.extensions` entry point, without patching Sellbird. A failing
+  extension stops Sellbird with its name; a failing step is logged and
+  skipped. `sellbird.dashboard.build_app(guard=, routers=)` serves the
+  dashboard for someone else, with its own sign-in and a per-request home.
+  See [docs/extensions.md](docs/extensions.md).
+- **Storage and settings seams.** Every database open goes through
+  `sellbird.storage`: SQLite paths as before, or `<prefix>:<name>` for a
+  backend an extension registers (in code or through the `sellbird.storage`
+  entry point), which owns and checks its own schema. `sellbird.config.use_config`
+  sets the config `load_config()` returns for a task and its threads, for
+  settings kept somewhere other than `sellbird.yaml`. A self-hosted install
+  behaves exactly as before.
+- **Runs from a home folder, not only from a checkout.** Installed with `pip`
+  or `pipx`, Sellbird used to look for its config, prompts and skills inside
+  site-packages. Now one home folder holds them: `SELLBIRD_HOME` if set, else
+  the checkout (unchanged), else the per-user data folder. The package ships
+  the defaults and copies in what's missing on first run, never overwriting
+  your edits. The Docker image sets `SELLBIRD_HOME=/app`. See "Where your
+  files live" in the README.
+- **Verifier API keys stay out of logs** (from #185 by @techity-mushtaque).
+  Hunter's key now goes in the `X-API-KEY` header; Reoon and ZeroBounce only
+  take it in the URL, so the `httpx` and `httpcore` loggers stay at WARNING and
+  Sellbird's own debug lines blank the key out of error text.
+- **`channels.email.min_write_score`** (default 0): the writer skips prospects
+  scored below it. Scout also checks `compliance.do_not_contact` before
+  reading a listed company's site or spending verification credits on it.
+- **A free Precleared key in one step** (from #121 by @gabrielaoimevbore-beep).
+  `sellbird setup` now offers to get a free key for the cold-email check with
+  just an email address, instead of sending people to a web page and back, and
+  `sellbird precleared-key` does the same later (`--email` asks nothing, for a
+  coding agent setting Sellbird up). The key is saved in `.env` as
+  `PRECLEARED_API_KEY` and never printed. When the keyless allowance (10 checks
+  a day) runs out, the Today page, `sellbird status` and the Outbox reason point
+  to the command. Free keys now give 100 checks a day for their first 14 days,
+  then 25, and the docs say so.
+
+### Changed
+
+- **`Referrer-Policy: same-origin`** on the dashboard, instead of
+  `no-referrer`: under `no-referrer` Firefox sends `Origin: null` on POSTs,
+  which the dashboard's provenance check refuses. Other sites still never
+  get a Referer.
+- **Microsoft 365: a send that may have gone out keeps its draft.** A 5xx or
+  a dropped connection on the final send no longer deletes the draft, and
+  the Outbox marks the email as possibly sent (never retried). A 4xx refusal
+  still deletes it. Any provider that reports a possible send is marked the
+  same way.
+
+### Fixed
+
+- **Instantly's daily cap counts your local day, not UTC** (from #177 by
+  @solvejet-team), so the cap resets at your midnight.
+
+## [0.4.0] - 2026-11-06
+
+### Changed
+
+- **Harvey is now Sellbird.** The package, the `sellbird` command,
+  `sellbird.yaml` and `sellbird.local.yaml`, `data/sellbird.db`, `SELLBIRD_*`
+  settings and the Docker service all carry the new name. An existing clone
+  upgrades with `git pull && pip install -e .`. On first run Sellbird moves
+  `harvey.local.yaml` and `data/harvey.*` to the new names. It never
+  overwrites, and waits while a Harvey process is still running.
+  `HARVEY_*` settings still apply. `harvey` and `python -m harvey` keep
+  working for now and say they moved. See "Upgrading from Harvey" in the
+  README. After an upgrade moves files, the dashboard's Today screen says
+  "Harvey is now Sellbird" once, until you dismiss it.
+- **The agent no longer calls itself by the product's name.** The prompts
+  described the model as Harvey ("like Harvey Specter"), and the default and
+  trained sender was Harvey at harvey@your-domain. The default sender is now
+  Alex. Messages saved before the rename still count as ours in reply
+  history.
+- **Logo.** The dashboard shows the Sellbird swallow and favicon.
+- **License: AGPL-3.0.** From 0.4.0 Sellbird is licensed under the GNU
+  Affero General Public License v3.0 only. Releases up to 0.3.x stay MIT, and
+  that code keeps its MIT notice in `NOTICE`. New commits are signed off
+  under the Developer Certificate of Origin (see `CONTRIBUTING.md`).
+- **A shorter README.** The front page covers what Sellbird does, the quick
+  start and upgrading from Harvey. The detailed sections moved unchanged into
+  `docs/`, with a new dashboard recording and screenshots. Added
+  `SECURITY.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md` and issue and pull
+  request templates.
+
+### Added
+
+- **Company fit and the company register.** The Companies tab now sorts by a
+  0-100 fit score worked out from what Harvey already holds: the ICP sector
+  match, a contact with a target title, the best email found, and an open
+  role matching `icp.hiring_signals`. Hover a score for the reasons. A Status
+  column says what happened to each company (emailed, replied, opted out,
+  approved, draft waiting, ready) or why nothing was sent (only a risky email, no valid
+  address, nobody named on the site, not processed yet, on the do-not-contact
+  list). A risky (catch-all) email counts as ready when
+  `channels.email.send_to_risky` is on, and the do-not-contact list is read
+  as the sender reads it, so an entry added while Harvey runs shows at once. Clicking a company opens a details card above its contacts: website,
+  sector, area, why it was selected, the people named on its site and the
+  hiring roles, each linked to the page they came from. `harvey companies`
+  (or *Export register* on the tab) writes the whole register as a CSV,
+  including companies with no contact, so they can be worked another way.
+  The tab now lists up to 2,000 companies, best fit first and paged 50 at a
+  time, instead of the newest 200; the CSV has every company. A contact who
+  opted out or is on the do-not-contact list doesn't count toward fit, and a
+  role the careers board no longer lists stops counting as hiring. Nothing is stored: it's all read from the database on request, so it
+  follows the config.
+
+- **Your own email shape** (`writer.email_rules`). Point it at a markdown file
+  (`skills/email_rules.md` is gitignored) and its rules replace the Writer's
+  built-in shape, which ends every prompt and so beat anything in the skills:
+  email 1 under 75 words, an observation and a question, no pitch, no link.
+  It covers the per-person first email and the 3-email sequence. It never
+  lifts the FACTS rule, and the send gate (220 words, one link,
+  do-not-contact) still applies. The prompt now says what Harvey really adds
+  when it sends: with `compliance.opt_out_line` set, the draft gets no second
+  opt-out sentence; with it empty, an opt-out sentence the rules ask for is
+  written into the body. A file that's set but missing, empty or too long
+  stops the Writer, so it never drafts in the shape you replaced. Unset,
+  nothing changes.
+
 - **Scavio discovery providers** (`scavio_maps`, `scavio_search`). Google Maps
   listings around each city, with phone, website, category, rating and review
   count, and Google organic results with rank, both from one
   `SCAVIO_API_KEY`. Maps is 1 credit per 20 businesses and Search 1 credit per
   10 results; estimates use the $0.01 pay-as-you-go credit price. Off unless
   you pick one in `harvey discover` or the dashboard. Closes #28.
+- **Sent emails on the Conversations tab.** A new *Awaiting reply* filter
+  lists people Harvey recently emailed who haven't answered yet (from its
+  latest 2,000 sent emails), with each sent
+  email and when it went out, so the tab shows every outbound thread instead
+  of only the ones that got a reply. When a reply arrives the card is
+  replaced by the real conversation, which already shows those emails. The
+  cards are read-only and create no conversation rows. The API change is
+  opt-in: `/api/conversations?awaiting=1` adds them, and the endpoint without
+  the parameter returns exactly what it did before. *Open* still means reply
+  conversations only. A card for a general inbox (no person's name) shows
+  the company name instead of "Unknown". People who replied, opted out or
+  bounced, and colleagues of anyone who replied, aren't listed.
+- **An optional logo under every email** (from #138).
+  `channels.email.signature.logo` sends Gmail, Microsoft 365 and SMTP email as
+  HTML with the logo embedded. Off by default. An unusable logo holds approved
+  email and says why on Today, rather than sending without it.
 - **TrulyInbox for warmup.** Harvey now recommends TrulyInbox for warming and
   keeping sending mailboxes healthy, and reads it: `harvey trulyinbox connect`
   (or the new warmup step on the dashboard's setup checklist) checks a key and
@@ -263,6 +527,46 @@ minor versions can still change behaviour.
 
 ### Fixed
 
+- **Spanish opt-outs are caught without the model** (from #154). "No,
+  gracias", a bare "BAJA", "denme de baja", "no me escriba más", "dejen de
+  enviarme correos", "sáquenme de su lista", "no quiero recibir más correos"
+  and "no me interesa" as a whole answer are honored by rule, with or
+  without accents. Each needs the verb aimed at the sender, so "¡cómo no,
+  gracias!", "queremos dar de baja a nuestro proveedor", "sáquenme de dudas",
+  "no me interesa el plan anual, pero sí el mensual" and "no me escriba
+  hasta enero" go to the model instead. A Spanish `compliance.opt_out_line`
+  (`Responda BAJA`, `Responda "no, gracias"`) now passes validation, and
+  "Enviado desde mi iPhone" no longer hides a bare "BAJA". OpenStreetMap
+  discovery maps Spanish business terms (ferretería, supermercado,
+  farmacia, mayorista, contador, panadería, clínica and others) to the tags
+  that carry them.
+- **Microsoft 365 reads an inbox with more than one page.** Live Graph writes
+  the inbox in OData key form in `@odata.nextLink`
+  (`/me/mailFolders('inbox')/messages`), and the link check accepted only
+  `/me/mailFolders/inbox/messages`. Any mailbox with more than 50 messages in
+  the last 7 days failed every read with "@odata.nextLink rejected: not the
+  Graph inbox listing", so sending was held for good. Both spellings of the
+  same listing are accepted now; every other path is still refused before the
+  token is attached.
+- **Hebrew legal threats and complaints go to you without the model** (from
+  #135), and an opt-out that also threatens, in any language, is honored and
+  shows on **Needs you** instead of being closed unseen.
+- **OpenStreetMap discovery survives a bad afternoon** (from #125). A 500, 502 or
+  503 from one Overpass mirror now moves on to the next instead of ending the
+  search, Overpass gets enough time to get through its queue, and the mirror
+  list drops one that was the same machine as another. `scripts/diagnose_overpass.py`
+  re-checks the mirrors.
+- **Hebrew opt-outs are honored without the model** (from #134). A reply like
+  "הסר", "תורידו אותי מהרשימה" or "לא תודה" now opts out as its English
+  equivalent does, and `compliance.opt_out_line` can ask for a Hebrew reply.
+- **Harvey keeps prospecting when it can't send or is waiting on a reply**
+  (from #128, #126). A draft that couldn't deploy (email channel off, or native
+  sending paused) or any open conversation used to win every cycle, so Harvey
+  stopped writing and finding prospects. Replies are now read alongside
+  whatever the cycle does, still before anything is sent. An auto-reply now
+  goes to **Needs you**. A conversation handed to you stays with you: later
+  replies join it and Harvey doesn't answer them until you hand it back. Before,
+  a reply after an escalation started a new conversation Harvey could answer.
 - **Replies remember the whole conversation** (closes #97). A reply was
   written from the last six messages only, so a requirement the prospect
   stated earlier ("synthetic data only, processed in the EU") dropped out

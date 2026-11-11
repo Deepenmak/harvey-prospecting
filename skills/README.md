@@ -1,10 +1,10 @@
 # Skills
 
-Skills are editable Markdown files that give Harvey foundational sales knowledge. Each agent loads the skills it needs before making decisions.
+Skills are editable Markdown files that give Sellbird foundational sales knowledge. Each agent loads the skills it needs before making decisions.
 
 ## How Skills Work
 
-When an agent runs, it calls `brain.load_skills_for_agent("agent_name")` which concatenates the relevant skill files and injects them into the prompt. This means you can change Harvey's behavior by editing these files — no code changes needed.
+When an agent runs, it calls `brain.load_skills_for_agent("agent_name")` which concatenates the relevant skill files and injects them into the prompt. This means you can change Sellbird's behavior by editing these files — no code changes needed.
 
 ## Skill → Agent Mapping
 
@@ -32,7 +32,7 @@ When an agent runs, it calls `brain.load_skills_for_agent("agent_name")` which c
 - **`account_navigation.md`** — Multi-contact handling, entry point strategy, multi-threading rules
 - **`selling_to_startups.md`** — Writing to early-stage founders: who reads, timing around a YC or accelerator batch and Demo Day, writing to companies that just raised (and when a raise is too old to mention), what not to do, handling their replies. Used automatically for YC-backed, accelerator-backed and recently funded prospects.
 - **`signal_playbook.md`** — Turning buying signals (hiring, tech stack, funding) into the email's first line; which signal wins when there are several; using a job posting as the hook without guessing or implying inside knowledge
-- **`email_frameworks.md`** — Cold email copywriting rules, banned AI patterns, 2026 reply-rate data (length, offer CTAs, cadence, no tracking), 5 frameworks (AIDA, PAS, BAB, QVC, 3Ps)
+- **`email_frameworks.md`** — Cold email copywriting rules, banned AI patterns, 2026 reply-rate data (length, offer CTAs, cadence, no tracking), the 3-email sequence (Observation, Angle, Breakup), subject lines, personalization
 - **`sales_methodology.md`** — ABC Loop, conversation flow, tone calibration, ethical guidelines
 - **`offer_strategy.md`** — Offer ladder by engagement level, closing mechanics, timing rules
 - **`objection_handling.md`** — LAARC framework, 4 objection categories with responses
@@ -40,7 +40,7 @@ When an agent runs, it calls `brain.load_skills_for_agent("agent_name")` which c
 
 ## Auto-Generated Skills
 
-These are created by `harvey train <url>` and are specific to your product:
+These are created by `sellbird train <url>` and are specific to your product:
 
 - **`product_knowledge.md`** — Features, benefits, pricing, use cases, pain points, buying triggers
 - **`competitive_intel.md`** — Battle cards for each competitor, differentiation angles, migration paths
@@ -49,4 +49,4 @@ These are created by `harvey train <url>` and are specific to your product:
 
 1. Edit any `.md` file in this directory
 2. Changes take effect on the next heartbeat cycle (no restart needed)
-3. To add a new skill, create the file and add it to the `skill_map` in `harvey/brain.py`
+3. To add a new skill, create the file and add it to the `skill_map` in `sellbird/brain.py`

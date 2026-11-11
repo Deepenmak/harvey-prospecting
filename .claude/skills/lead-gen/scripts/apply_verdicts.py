@@ -5,7 +5,7 @@ Usage: apply_verdicts.py [verdicts.json] [plan.csv]
 Defaults: exports/work/verdicts.json and exports/plan.csv.
 
 verdicts.json is a list of {"apollo_id", "verdict", "reason"}, verdict one of
-a, b, skip. Rows without a verdict are left blank (harvey fetch --from-plan
+a, b, skip. Rows without a verdict are left blank (sellbird fetch --from-plan
 ignores them) and listed, so nothing is silently dropped.
 """
 
@@ -14,7 +14,7 @@ import json
 import sys
 from collections import Counter
 
-from harvey.fetch import EXPORT_DIR, PLAN_FILE
+from sellbird.fetch import EXPORT_DIR, PLAN_FILE
 
 VERDICTS = {"a", "b", "skip"}
 

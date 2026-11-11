@@ -1,5 +1,5 @@
 /**
- * Harvey fetch ledger: Google Sheet web app for `harvey fetch`.
+ * Sellbird fetch ledger: Google Sheet web app for `sellbird fetch`.
  *
  * Setup (once): open the sheet, Extensions > Apps Script, paste this file,
  * set TOKEN below to a long random string, then Deploy > New deployment >

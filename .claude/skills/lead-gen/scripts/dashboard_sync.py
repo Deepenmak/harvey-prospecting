@@ -1,4 +1,4 @@
-"""Move Harvey's contacts and ledger to and from the leads dashboard.
+"""Move Sellbird's contacts and ledger to and from the leads dashboard.
 
 The dashboard (a private claude.ai artifact) is the lasting record: a cloud
 run starts from a fresh clone, so it restores from the dashboard before
@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from harvey.fetch import (CONTACT_COLUMNS, LOCAL_LEDGER, merge_contacts,
+from sellbird.fetch import (CONTACT_COLUMNS, LOCAL_LEDGER, merge_contacts,
                           read_contacts, save_contacts)
 
 NUMERIC = ("score", "employees", "open_roles")

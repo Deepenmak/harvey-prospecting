@@ -1,16 +1,16 @@
 ---
 name: lead-gen
-description: Run Harvey's Apollo lead generation end to end with Claude as the judgement layer. Free search, parallel ICP vetting, a spend gate, enrichment, parallel web research for buying signals, fact verification, one ranked contact list. Use when the user asks to fetch, source or generate leads with Harvey and Apollo.
+description: Run Sellbird's Apollo lead generation end to end with Claude as the judgement layer. Free search, parallel ICP vetting, a spend gate, enrichment, parallel web research for buying signals, fact verification, one ranked contact list. Use when the user asks to fetch, source or generate leads with Sellbird and Apollo.
 argument-hint: "[credits] [segment|mix] [--yes] [--no-research] [--drafts]"
 disable-model-invocation: true
 ---
 
-# Lead generation with Harvey + Apollo
+# Lead generation with Sellbird + Apollo
 
 Arguments: $ARGUMENTS
 
-Harvey does the deterministic, money-touching work (search, enrich, ledger,
-credit cap). You and your subagents do the judgement Harvey can't: whether a
+Sellbird does the deterministic, money-touching work (search, enrich, ledger,
+credit cap). You and your subagents do the judgement Sellbird can't: whether a
 company fits, whether it shows buying intent, and why it would buy.
 
 Defaults when an argument is missing: segment `mix`, credits = ask the user.
@@ -42,7 +42,7 @@ call_notes, deal_check and proposal_draft. Never create another export file.
 
 ## Hard rules
 
-- Only you (the orchestrator) run `harvey fetch`. Subagents never run Bash,
+- Only you (the orchestrator) run `sellbird fetch`. Subagents never run Bash,
   never spend credits and never write files: the ledger has one writer.
 - Never pass `--credits` above what the user approved, never edit
   `phase_credit_cap` or `segments.yaml` during a run, never touch
@@ -57,7 +57,7 @@ call_notes, deal_check and proposal_draft. Never create another export file.
 
 Run from the project root. Python is `.venv/Scripts/python.exe` on Windows,
 `.venv/bin/python` elsewhere; prefix `PYTHONIOENCODING=utf-8` in Git Bash.
-Call it `PY` below. `H` means `PY -m harvey`. `S` means
+Call it `PY` below. `H` means `PY -m sellbird`. `S` means
 `.claude/skills/lead-gen/scripts`.
 
 ICP file: `optywise_icp.md` unless the user names another. Read it and
@@ -117,7 +117,7 @@ are this run's contacts. If `--no-research`, skip to Phase 7.
 
 This is where buying intent comes from: Apollo's free plan blocks hiring
 filters, and mid-size carriers, banks and RCM firms rarely publish a job
-board Harvey can read.
+board Sellbird can read.
 
 - Take the `new_ids` rows from `exports/contacts_all.csv`. Scale to the batch:
   up to 6 leads, research yourself or with one `lead-researcher` (if yourself,

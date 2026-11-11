@@ -1,4 +1,4 @@
-# Apollo sourcing segments for `harvey fetch`. Order = rotation order.
+# Apollo sourcing segments for `sellbird fetch`. Order = rotation order.
 # Reasoning behind each segment: optywise_icp.md.
 
 # Hard stop for this phase: fetch refuses to spend past it (the ledger is
@@ -8,7 +8,7 @@ phase_credit_cap: 80
 per_run_credits: 10
 
 # Free profile signals fetch collects on every company it enriches.
-# Listing them here is the operator's confirmation (see harvey signals).
+# Listing them here is the operator's confirmation (see sellbird signals).
 confirm_signals: [HIRING_ROLE, OPEN_ROLES, TECH_STACK]
 
 # Title order = who to pick first when a company has several matches.

@@ -13,7 +13,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from harvey.fetch import EXPORT_DIR, capped_intent, read_contacts, update_contacts
+from sellbird.fetch import EXPORT_DIR, capped_intent, read_contacts, update_contacts
 
 WORK = EXPORT_DIR / "work"
 

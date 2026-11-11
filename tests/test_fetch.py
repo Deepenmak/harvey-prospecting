@@ -1,4 +1,4 @@
-"""harvey fetch: candidate choice and segment rotation (no network)."""
+"""sellbird fetch: candidate choice and segment rotation (no network)."""
 
 import asyncio
 import csv
@@ -6,7 +6,7 @@ import importlib.util
 import json
 import sys
 
-from harvey.fetch import (FileLedger, account_tier, capped_intent, choose_candidates,
+from sellbird.fetch import (FileLedger, account_tier, capped_intent, choose_candidates,
                           domain_of, email_status, interleave, merge_contacts,
                           pick_segment, plan_picks, read_contacts, relevant_roles,
                           save_contacts, score, title_priority, update_contacts)
@@ -221,7 +221,7 @@ def test_weekly_stats_count_per_segment():
 
 
 def test_cloud_run_refuses_without_a_restored_ledger(tmp_path, monkeypatch):
-    import harvey.fetch as fetch
+    import sellbird.fetch as fetch
 
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)

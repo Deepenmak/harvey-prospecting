@@ -15,7 +15,7 @@ Learned from the first Optywise Apollo test (30 credits, Oct 2026):
 - Website profiling found zero AI hiring signals across 30 regulated mid-size
   companies: none publish a Greenhouse, Lever, Ashby or Workable board. Intent
   has to come from web research, which is why Phase 5 exists.
-- Harvey's numeric score saturated (23 of 30 at 95), so the ranking uses the
+- Sellbird's numeric score saturated (23 of 30 at 95), so the ranking uses the
   vetter's fit, the researcher's intent and verification first, score last.
 
 Multi-agent pays off only where work is independent and breadth-first: one

@@ -16,10 +16,10 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from harvey.collectors import discover as D
-from harvey.config import EnvConfig, load_config
-from harvey.signals import SIGNAL_CATALOG, seed_signal_catalog
-from harvey.state import StateManager
+from sellbird.collectors import discover as D
+from sellbird.config import EnvConfig, load_config
+from sellbird.signals import SIGNAL_CATALOG, seed_signal_catalog
+from sellbird.state import StateManager
 
 
 @pytest_asyncio.fixture
@@ -808,8 +808,8 @@ def test_the_default_provider_needs_no_account():
 
 @pytest.mark.asyncio
 async def test_unconfigured_provider_says_which_key_is_missing(state, config, monkeypatch):
-    from harvey.config import EnvConfig
-    monkeypatch.setattr("harvey.config.load_env", lambda: EnvConfig())
+    from sellbird.config import EnvConfig
+    monkeypatch.setattr("sellbird.config.load_env", lambda: EnvConfig())
     report = await D.run_discovery(state, config, "dataforseo_listings",
                                    [D.DiscoveryQuery(term="roofer")])
     assert report.stopped == "not configured"
@@ -826,7 +826,7 @@ async def test_empty_api_key_runs_nothing_and_says_so(state, config,
                                                       register, monkeypatch):
     """The 2026-10-24 bug: an empty SERPER_API_KEY placeholder "succeeded"
     with 0 observations and exit code 0. It must stop with a named error."""
-    monkeypatch.setattr("harvey.config.load_env",
+    monkeypatch.setattr("sellbird.config.load_env",
                         lambda: EnvConfig(serper_api_key=""))
     fake = register(D.Serper())   # fresh instance — don't mutate the singleton
 
@@ -845,7 +845,7 @@ async def test_empty_api_key_runs_nothing_and_says_so(state, config,
 async def test_template_placeholder_key_is_treated_as_missing(state, config,
                                                               register,
                                                               monkeypatch):
-    monkeypatch.setattr("harvey.config.load_env",
+    monkeypatch.setattr("sellbird.config.load_env",
                         lambda: EnvConfig(serper_api_key="your_api_key_here"))
     fake = register(D.Serper())   # fresh instance — don't mutate the singleton
 
@@ -951,6 +951,149 @@ async def test_overpass_falls_over_to_the_next_mirror(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+async def test_a_mirror_failing_transiently_hands_over_to_the_next(status, monkeypatch):
+    """502 is the one that bit us: only 429 and 504 used to count as "try the
+    next one", so a bad gateway on the first mirror sank a search the second
+    mirror could have answered."""
+    monkeypatch.setattr(D.OpenStreetMap, "BACKOFF", 0.0)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if len(seen) == 1:
+            return httpx.Response(status, text="")
+        return httpx.Response(200, json={"elements": [{
+            "type": "node", "id": 7,
+            "tags": {"name": "Kestrel Exteriors", "craft": "roofer"},
+        }]})
+
+    provider = D.OpenStreetMap()
+    async with _client(handler) as client:
+        out = await provider.fetch(client, {}, D.DiscoveryQuery(
+            term="roofer", coordinate="39.7,-104.9,40"))
+    assert [b.name for b in out] == ["Kestrel Exteriors"]
+    assert seen == list(D.OpenStreetMap.ENDPOINTS[:2]), "the first mirror's failure should not have been fatal"
+
+
+@pytest.mark.asyncio
+async def test_every_mirror_failing_is_an_error_that_names_the_cause(monkeypatch):
+    """Throttling is not the only way the free mirrors go away, and the error
+    a user reads has to be true of what actually happened."""
+    monkeypatch.setattr(D.OpenStreetMap, "BACKOFF", 0.0)
+    statuses = iter((502, 503, 500))
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(next(statuses), text="")
+
+    provider = D.OpenStreetMap()
+    with pytest.raises(RuntimeError, match="unavailable or throttling"):
+        async with _client(handler) as client:
+            await provider.fetch(client, {}, D.DiscoveryQuery(
+                term="roofer", coordinate="39.7,-104.9,40"))
+    assert seen == list(D.OpenStreetMap.ENDPOINTS), "every mirror should be tried"
+
+
+@pytest.mark.asyncio
+async def test_a_query_the_mirrors_reject_fails_at_the_first_one(monkeypatch):
+    """A 400 means our query is wrong, not that the mirror is having a bad
+    day. Asking two more volunteer servers the same bad question wastes their
+    bandwidth and buries the real error under a retry story."""
+    monkeypatch.setattr(D.OpenStreetMap, "BACKOFF", 0.0)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(400, text="malformed query")
+
+    provider = D.OpenStreetMap()
+    with pytest.raises(httpx.HTTPStatusError):
+        async with _client(handler) as client:
+            await provider.fetch(client, {}, D.DiscoveryQuery(
+                term="roofer", coordinate="39.7,-104.9,40"))
+    assert seen == list(D.OpenStreetMap.ENDPOINTS[:1]), "a rejected query is not a mirror problem"
+
+
+def test_the_mirrors_are_separate_instances():
+    """overpass.private.coffee resolved to the same address as
+    overpass.kumi.systems, so the list held three URLs and two servers: a 502
+    on the first mirror bought two tries at one machine. DNS cannot be checked
+    offline, so this pins the pair we measured and the shape of the list;
+    scripts/diagnose_overpass.py re-checks the addresses for real."""
+    hosts = [u.split("/")[2] for u in D.OpenStreetMap.ENDPOINTS]
+    assert len(set(hosts)) == len(hosts), "the same host twice is not a mirror"
+    aliases = {"overpass.kumi.systems", "overpass.private.coffee"}
+    assert len(aliases & set(hosts)) <= 1, "those two are one instance"
+
+
+@pytest.mark.asyncio
+async def test_overpass_asks_for_a_budget_a_queued_mirror_can_meet(monkeypatch):
+    """A one-node query measured 38s of queueing on a loaded mirror, which the
+    module's 45s read budget cannot absorb once the query is a real one."""
+    monkeypatch.setattr(D.OpenStreetMap, "BACKOFF", 0.0)
+    seen = {}
+
+    def handler(request):
+        seen["read"] = (request.extensions.get("timeout") or {}).get("read")
+        seen["body"] = request.content.decode()
+        return httpx.Response(200, json={"elements": []})
+
+    provider = D.OpenStreetMap()
+    async with _client(handler) as client:
+        await provider.fetch(client, {}, D.DiscoveryQuery(
+            term="roofer", coordinate="39.7,-104.9,40"))
+    assert seen["read"] == D.OpenStreetMap.HTTP_TIMEOUT.read > D.TIMEOUT.read
+    assert f"[timeout:{D.OpenStreetMap.SERVER_TIMEOUT}]" in seen["body"],         "the server has to be told how long it may take, too"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout,
+                                   httpx.ReadTimeout])
+async def test_a_mirror_that_never_answers_hands_over_to_the_next(error, monkeypatch):
+    """A mirror that accepts the connection and then goes quiet is the failure
+    we actually hit; it never had a test, only the ones that answer."""
+    monkeypatch.setattr(D.OpenStreetMap, "BACKOFF", 0.0)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if len(seen) == 1:
+            raise error("", request=request)
+        return httpx.Response(200, json={"elements": [{
+            "type": "node", "id": 9,
+            "tags": {"name": "Pelham Roofing", "craft": "roofer"},
+        }]})
+
+    provider = D.OpenStreetMap()
+    async with _client(handler) as client:
+        out = await provider.fetch(client, {}, D.DiscoveryQuery(
+            term="roofer", coordinate="39.7,-104.9,40"))
+    assert [b.name for b in out] == ["Pelham Roofing"]
+    assert seen == list(D.OpenStreetMap.ENDPOINTS[:2])
+
+
+@pytest.mark.asyncio
+async def test_mirrors_that_all_hang_raise_instead_of_an_empty_market(monkeypatch):
+    """Same rule as a throttle: silence from every mirror must not read as a
+    market with no businesses in it."""
+    monkeypatch.setattr(D.OpenStreetMap, "BACKOFF", 0.0)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        raise httpx.ReadTimeout("", request=request)
+
+    provider = D.OpenStreetMap()
+    with pytest.raises(RuntimeError):
+        async with _client(handler) as client:
+            await provider.fetch(client, {}, D.DiscoveryQuery(
+                term="roofer", coordinate="39.7,-104.9,40"))
+    assert seen == list(D.OpenStreetMap.ENDPOINTS), "every mirror should be tried"
+
+
+@pytest.mark.asyncio
 async def test_overpass_needs_a_coordinate_and_says_so(caplog):
     provider = D.OpenStreetMap()
     async with _client(lambda r: httpx.Response(200, json={})) as client:
@@ -975,7 +1118,7 @@ async def test_geocode_is_cached_so_a_city_is_looked_up_once(state):
 
     def handler(request):
         calls["n"] += 1
-        assert "Harvey" in request.headers["user-agent"]
+        assert "Sellbird" in request.headers["user-agent"]
         return httpx.Response(200, json=[{"lat": "39.7392", "lon": "-104.9903"}])
 
     async with _geo_client(handler) as client:
@@ -1128,7 +1271,7 @@ async def test_directory_title_still_filtered_after_adapter(provider, tmp_path, 
     real_client = httpx.AsyncClient
     monkeypatch.setattr(D.httpx, 'AsyncClient', lambda **kw: real_client(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)), **kw))
-    monkeypatch.setattr('harvey.config.load_env', lambda: EnvConfig(
+    monkeypatch.setattr('sellbird.config.load_env', lambda: EnvConfig(
         serper_api_key='dummy', dataforseo_login='dummy', dataforseo_password='dummy',
         scavio_api_key='dummy'))
     state = StateManager(str(tmp_path / 'test.db'))
@@ -1179,14 +1322,14 @@ def test_homepage_prefers_stronger_brand_over_longer_partial_match():
 
 # --- CLI startup key guard -------------------------------------------
 #
-# `harvey discover --provider serper` with an empty or placeholder
+# `sellbird discover --provider serper` with an empty or placeholder
 # SERPER_API_KEY used to exit 0 and record zero observations. cmd_discover
 # must refuse at startup - before the estimate, before any call - in both
 # collect mode, and never block estimates or the keyless default provider.
 
 from types import SimpleNamespace
 
-from harvey.cli import cmd_discover
+from sellbird.cli import cmd_discover
 
 
 def _cli_args(**over):
@@ -1197,7 +1340,7 @@ def _cli_args(**over):
 
 
 def _fake_env(monkeypatch, **values):
-    from harvey import config as cfg
+    from sellbird import config as cfg
     monkeypatch.setattr(
         cfg, "load_env",
         lambda: SimpleNamespace(model_dump=lambda: dict(values)))
@@ -1236,7 +1379,7 @@ def test_keyless_default_provider_is_never_blocked(monkeypatch, capsys):
     # osm has no env_keys, so the startup guard must pass through. Reaching
     # load_config (patched to raise) proves the guard let the command by.
     _fake_env(monkeypatch)
-    from harvey import config as cfg
+    from sellbird import config as cfg
 
     def _boom():
         raise RuntimeError("reached-load-config")
@@ -1282,7 +1425,7 @@ async def test_tinyfish_rate_limit_names_the_real_limits(monkeypatch):
 
 
 def test_tinyfish_docs_state_the_published_limits():
-    from harvey.paths import PROJECT_ROOT
+    from sellbird.paths import PROJECT_ROOT
     for name in ("README.md", "CLAUDE.md", ".env.example", "CHANGELOG.md"):
         text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
         for claim in ("12,000 free", "12,000 queries", "12,000 searches", "12k free"):
@@ -1426,7 +1569,7 @@ def test_new_junk_filters_keep_employer_sites(domain):
 
 @pytest.mark.parametrize("domain", ["naukri.com", "www.indiamart.com", "thingiverse.com"])
 def test_new_junk_filters_reject_aggregators(domain):
-    from harvey.agents.scout import Scout
+    from sellbird.agents.scout import Scout
     assert D.is_junk(domain)
     assert Scout._is_noise_domain(None, domain)
 
@@ -1448,7 +1591,7 @@ async def test_serper_caps_request_and_estimate():
 
 @pytest.mark.asyncio
 async def test_scout_serper_caps_request(monkeypatch):
-    from harvey.agents.scout import Scout
+    from sellbird.agents.scout import Scout
     from types import SimpleNamespace
     requests = []
     async def fetch(url, **kwargs):
@@ -1472,7 +1615,7 @@ async def test_failed_attempt_is_not_a_successful_query(state, config, register)
 
 @pytest.mark.parametrize("attempted,succeeded", [(0, 0), (2, 0), (2, 1), (1, 1)])
 def test_cli_exit_tracks_successful_queries(monkeypatch, config, attempted, succeeded):
-    from harvey import config as cfg, pipeline
+    from sellbird import config as cfg, pipeline
     _fake_env(monkeypatch, serper_api_key="fixture")
     monkeypatch.setattr(cfg, "load_config", lambda: config)
     async def init_db(self):
@@ -1504,7 +1647,7 @@ async def test_scavio_stops_run_on_account_errors(state, config, register, monke
     real_client = httpx.AsyncClient
     monkeypatch.setattr(D.httpx, "AsyncClient", lambda **kw: real_client(
         transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("harvey.config.load_env", lambda: EnvConfig(scavio_api_key="fixture"))
+    monkeypatch.setattr("sellbird.config.load_env", lambda: EnvConfig(scavio_api_key="fixture"))
     report = await D.run_discovery(state, config, provider.key,
         [D.DiscoveryQuery(term="roofer"), D.DiscoveryQuery(term="plumber")])
     assert len(calls) == 1
@@ -1529,7 +1672,7 @@ async def test_scavio_partial_search_preserves_prior_ranks_and_cost(state, confi
     real_client = httpx.AsyncClient
     monkeypatch.setattr(D.httpx, "AsyncClient", lambda **kw: real_client(
         transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr("harvey.config.load_env", lambda: EnvConfig(scavio_api_key="fixture"))
+    monkeypatch.setattr("sellbird.config.load_env", lambda: EnvConfig(scavio_api_key="fixture"))
     query = D.DiscoveryQuery(term="roofer", depth=20)
     await D.run_discovery(state, config, provider.key, [query])
     previous = await state.get_company_by_domain("roofer10.example")
@@ -1588,3 +1731,15 @@ async def test_scavio_maps_resolves_coordinates_in_run(state, config, register, 
 @pytest.mark.parametrize("coordinate", ["nan,0,40", "0,inf,40", "91,0,40", "0,181,40", "bad,0,40"])
 def test_scavio_invalid_map_centers_fall_back_to_place_name(coordinate):
     assert D.ScavioMaps.map_center(coordinate) == ""
+
+
+@pytest.mark.asyncio
+async def test_osm_maps_spanish_business_terms():
+    provider = D.OpenStreetMap()
+    assert provider._tags("ferretería") == ["shop=hardware", "shop=doityourself"]
+    assert provider._tags("distribuidora de alimentos") == ["shop=wholesale"]
+    assert provider._tags("despacho contable") == ["office=accountant"]
+    assert provider._tags("farmacia") == ["amenity=pharmacy"]
+    assert provider._tags("comercio al mayor") == ["shop=wholesale"]
+    assert provider._tags("mayorista") == ["shop=wholesale"]
+    assert provider._tags("mayor's office") == []

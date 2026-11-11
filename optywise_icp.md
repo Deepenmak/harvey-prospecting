@@ -82,9 +82,9 @@ Looks good on paper but rarely closes. These are starting rules, so check them a
 - Companies being acquired, in distress or under a spending freeze.
 - A contact whose remit is outside the segment's market.
 
-## 7. Signals Harvey should look for
+## 7. Signals Sellbird should look for
 
-- **Hiring:** roles that mean in-market now. Machine Learning Engineer, AI Engineer, Applied AI, LLM Engineer, Head of AI, Forward Deployed Engineer, MLOps, Automation Engineer, Intelligent Automation, Claims Automation, Prior Authorization. Harvey reads Greenhouse, Lever, Ashby and Workable boards for these, and the open-roles count doubles as a size proxy.
+- **Hiring:** roles that mean in-market now. Machine Learning Engineer, AI Engineer, Applied AI, LLM Engineer, Head of AI, Forward Deployed Engineer, MLOps, Automation Engineer, Intelligent Automation, Claims Automation, Prior Authorization. Sellbird reads Greenhouse, Lever, Ashby and Workable boards for these, and the open-roles count doubles as a size proxy.
 - **Funding:** a raise in the last 12-18 months, for the startup tier.
 - **Tech stack** to add later as custom signals: Guidewire or Duck Creek (insurance), Epic, athenahealth or Waystar (RCM), nCino or Jack Henry (banking).
 
@@ -102,14 +102,14 @@ AI news alone doesn't make a buyer. It can just as easily mean the problem is so
 
 Strongest signals first, when choosing what to lead with: a stalled pilot or a failed vendor project, a current AI or automation hire for the workflow, a new AI or digital leader in the last 12 months, a dated modernization program, then a regulatory deadline, M&A, funding or fast growth.
 
-An account is tier `A`, worth 2-3 contacts, when fit is `a`, intent is `high`, the state is `open` and the facts passed checking. Harvey sets this itself, and it never spends credits by itself.
+An account is tier `A`, worth 2-3 contacts, when fit is `a`, intent is `high`, the state is `open` and the facts passed checking. Sellbird sets this itself, and it never spends credits by itself.
 
 ## 8. How to source them
 
 Local business listings are the wrong tool for this ICP. Use these:
 1. **Apollo:** search by industry, employee count, country and title, once the key is in .env.
-2. **Harvey's Serper presets:** hiring (careers pages listing the roles above) and funding (companies announcing a raise).
-3. **Harvey's job-board discovery** (python-jobspy) for companies hiring AI roles.
-4. **Harvey's profile step** on every company found, to add hiring and stack signals, then the cohort builder to rank.
+2. **Sellbird's Serper presets:** hiring (careers pages listing the roles above) and funding (companies announcing a raise).
+3. **Sellbird's job-board discovery** (python-jobspy) for companies hiring AI roles.
+4. **Sellbird's profile step** on every company found, to add hiring and stack signals, then the cohort builder to rank.
 
 Start with one segment and one market: US Tier 1 insurance (MGAs and mid-size carriers), about 50 companies, before widening.

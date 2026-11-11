@@ -7,7 +7,7 @@ Usage: weekly_stats.py
 import json
 from collections import Counter
 
-from harvey.fetch import LOCAL_LEDGER, load_segments, read_contacts
+from sellbird.fetch import LOCAL_LEDGER, load_segments, read_contacts
 
 
 def segment_stats(rows: list[dict]) -> dict[str, dict]:

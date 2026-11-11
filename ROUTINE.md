@@ -3,10 +3,15 @@
 Runs on Anthropic's cloud on a schedule, so it works with the laptop off.
 The lasting record is the **Optywise Leads** dashboard, a private claude.ai
 artifact: https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4. Each run starts
-from a fresh clone, so it restores Harvey's contacts and ledger from the
-dashboard first and writes them back at the end. `harvey fetch` refuses to
+from a fresh clone, so it restores Sellbird's contacts and ledger from the
+dashboard first and writes them back at the end. `sellbird fetch` refuses to
 run in the cloud when no ledger was restored, so a run can never forget what
 earlier runs spent or fetched.
+
+Harvey is now called Sellbird. A routine prompt written before the rename
+(`import harvey.fetch`, `harvey fetch`) still works through the `harvey/`
+compatibility package, but paste the prompt below into the routine when you
+next edit it, because upstream will remove `harvey/` in a later release.
 
 ## Task settings (claude.ai/code/routines)
 
@@ -15,7 +20,7 @@ earlier runs spent or fetched.
   read each company's own website); variable
   `APOLLO_HARVEY_KEY=<Apollo API key>`. Don't set `SHEET_WEBHOOK_URL`. No
   setup script needed: the repo's SessionStart hook (`.claude/settings.json`)
-  runs `scripts/cloud_setup.sh` at startup, which installs Harvey with
+  runs `scripts/cloud_setup.sh` at startup, which installs Sellbird with
   `python -m pip` (the image's bare `pip` belongs to a different Python) and
   reports a missing key or a blocked Apollo before the prompt is read.
 - Schedule: weekdays, 07:00 Asia/Kolkata (cloud tasks run at most hourly).
@@ -24,17 +29,17 @@ earlier runs spent or fetched.
 ## Prompt for the scheduled task
 
 ```
-You are running Optywise's scheduled lead fetch with Harvey, unattended:
+You are running Optywise's scheduled lead fetch with Sellbird, unattended:
 nobody will answer questions, so never wait for input. Python is `python`.
 The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
 
 0. Setup ran at session start (scripts/cloud_setup.sh); its "Cloud setup"
    lines are in your context. If it reported a missing key or a blocked
-   Apollo, stop and report that. If Harvey isn't importable, run
+   Apollo, stop and report that. If Sellbird isn't importable, run
    `bash scripts/cloud_setup.sh` once with CLAUDE_CODE_REMOTE set; if it
    still fails, stop and report it. Never print the key. Then prove the
    spend path works before any credits move:
-   `python -c "import harvey.fetch, httpx"` and
+   `python -c "import sellbird.fetch, httpx"` and
    `python .claude/skills/lead-gen/scripts/dashboard_sync.py --help` must both
    succeed. If either fails, stop: a run that can't save its ledger in step 3
    would spend credits that the next run forgets and spends again.
