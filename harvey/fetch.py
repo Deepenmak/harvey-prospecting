@@ -6,7 +6,7 @@ One run = one segment from segments.yaml, or every segment (``mix``):
 2. Drop anyone already fetched or skipped (the ledger), keep one person per
    company, and rank by the segment's title order.
 3. Enrich the top N (1 credit each when an email is found), never past
-   ``phase_credit_cap`` across all runs. With ``mix`` the credits go round
+   ``max_credits_per_session`` in one run (there is no lifetime cap). With ``mix`` the credits go round
    the segments in turn, so one run covers every segment.
 4. Store companies and prospects in Harvey's database, read each company's
    own site (free) for hiring and tech-stack signals, and score.
@@ -549,15 +549,17 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     by_key = {s["key"]: s for s in spec["segments"]}
     segs = (spec["segments"] if segment == "mix"
             else [pick_segment(spec, segment, led.last_segment)])
-    cap = int(spec.get("phase_credit_cap", 0))
+    # No lifetime cap: each session (one run) may spend at most
+    # max_credits_per_session, whatever was asked for.
+    session_max = int(spec.get("max_credits_per_session", 25))
     budget = credits if credits is not None else int(spec.get("per_run_credits", 10))
-    left = max(0, cap - led.credits_used)
-    budget = min(budget, left)
+    budget = min(budget, session_max)
+    left = budget
 
     report = FetchReport(segment="mix" if len(segs) > 1 else segs[0]["key"],
                          credits_left=left, ledger=type(ledger).__name__)
     if budget <= 0:
-        report.stopped = f"credit cap reached ({led.credits_used}/{cap} used)"
+        report.stopped = f"session credit limit is {session_max}; nothing to spend"
         return report
 
     skipped: list[str] = []

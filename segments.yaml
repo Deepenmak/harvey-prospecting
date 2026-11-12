@@ -1,9 +1,9 @@
 # Apollo sourcing segments for `harvey fetch`. Order = rotation order.
 # Reasoning behind each segment: optywise_icp.md.
 
-# Hard stop for this phase: fetch refuses to spend past it (the ledger is
-# data/fetch_ledger.json, restored from the leads dashboard in cloud runs).
-phase_credit_cap: 80
+# Hard limit per session (one run): fetch never spends more than this,
+# whatever --credits asks for. There is no lifetime cap.
+max_credits_per_session: 25
 # Default spend per run. One enrichment that finds an email = 1 credit.
 per_run_credits: 10
 

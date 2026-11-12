@@ -34,9 +34,9 @@ def main() -> None:
     ledger = json.loads(LOCAL_LEDGER.read_text(encoding="utf-8")) if LOCAL_LEDGER.exists() else {}
     spec = load_segments()
     used = sum(r.get("credits_used", 0) for r in ledger.get("runs", []))
-    cap, per_run = spec.get("phase_credit_cap", 0), spec.get("per_run_credits", 0)
-    print(f"\nCredits: {used} of {cap} used, {max(cap - used, 0)} left, "
-          f"{per_run} per run.")
+    per_run, session_max = spec.get("per_run_credits", 0), spec.get("max_credits_per_session", 0)
+    print(f"\nCredits: {used} used in total, {per_run} per run by default, "
+          f"{session_max} max per session.")
     print(f"Companies skipped so far: {len(ledger.get('skipped_orgs', []))}")
     print("Replies: none tracked yet (sending hasn't started).")
 

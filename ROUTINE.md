@@ -65,9 +65,9 @@ The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
    offered).
 
 Never send email to prospects, approve the Outbox or turn on autopilot.
-Never edit segments.yaml or the credit cap. Never commit or push.
+Never edit segments.yaml or the session credit limit. Never commit or push.
 ```
 
-Each run spends `per_run_credits` (10), shared across the five segments.
-Once the ledger reaches `phase_credit_cap` in segments.yaml every run stops
-itself before spending, until the cap is raised.
+Each run spends `per_run_credits` (10) by default, shared across the five
+segments, and never more than `max_credits_per_session` (25) in segments.yaml.
+There is no lifetime cap.

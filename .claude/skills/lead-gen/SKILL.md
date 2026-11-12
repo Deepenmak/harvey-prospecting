@@ -45,7 +45,7 @@ call_notes, deal_check and proposal_draft. Never create another export file.
 - Only you (the orchestrator) run `harvey fetch`. Subagents never run Bash,
   never spend credits and never write files: the ledger has one writer.
 - Never pass `--credits` above what the user approved, never edit
-  `phase_credit_cap` or `segments.yaml` during a run, never touch
+  `max_credits_per_session` or `segments.yaml` during a run, never touch
   `.github/workflows/` or repo secrets.
 - Never send email, approve the Outbox or turn on autopilot. Drafts are text.
 - Never print API keys or tokens, including inside URLs or errors.
@@ -71,8 +71,9 @@ ICP file: `optywise_icp.md` unless the user names another. Read it and
    (restored from the dashboard in a cloud run). If `SHEET_WEBHOOK_URL` is
    set, prefix every `H fetch` with `SHEET_WEBHOOK_URL=` so the local ledger
    is used.
-4. Credits left = `phase_credit_cap` minus the ledger's used credits. If the
-   requested credits exceed that, say so and use the smaller number.
+4. Credits per session are capped by `max_credits_per_session` in
+   `segments.yaml` (no lifetime cap). If the requested credits exceed it, say
+   so and use the smaller number.
 
 ## Phase 1: plan (free)
 
