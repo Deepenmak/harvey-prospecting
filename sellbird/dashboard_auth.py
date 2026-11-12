@@ -61,6 +61,31 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{43,128}")
 _PORT_RE = re.compile(r":[0-9]{1,5}")
 _IS_WINDOWS = os.name == "nt"
 
+# When SELLBIRD_CLOUD_HOST is set (e.g. "sellbird.optywise.com"), the guard
+# accepts that hostname and HTTPS origins from it, so a reverse-proxy deployment
+# works without SSH tunnels.  Leave it unset for local-only use.
+_CLOUD_HOST = (os.getenv("SELLBIRD_CLOUD_HOST") or "").strip().lower()
+if "://" in _CLOUD_HOST:
+    _CLOUD_HOST = _CLOUD_HOST.split("://", 1)[1]
+_CLOUD_HOST = _CLOUD_HOST.rstrip("/")
+
+
+def _is_host_allowed(host: str) -> bool:
+    if is_loopback(host):
+        return True
+    return bool(_CLOUD_HOST and host.split(":")[0] == _CLOUD_HOST.split(":")[0])
+
+
+def _is_origin_allowed(origin: str, host_header: str) -> bool:
+    o = origin.lower()
+    if o == f"http://{host_header}":
+        return True
+    if _CLOUD_HOST:
+        h = _CLOUD_HOST.split(":")[0]
+        return o in (f"https://{h}", f"http://{h}",
+                     f"https://{_CLOUD_HOST}", f"http://{_CLOUD_HOST}")
+    return False
+
 SECURITY_HEADERS = [
     (b"cache-control", b"no-store"),
     # same-origin, not no-referrer: under no-referrer Firefox (per the Fetch
@@ -292,6 +317,11 @@ def is_loopback(host: str) -> bool:
 
 
 def is_public_path(method: str, path: str) -> bool:
+    # Login form (GET) and credential check (POST) need no token.
+    if path == "/login" and method in ("GET", "HEAD"):
+        return True
+    if path == "/api/auth/login" and method == "POST":
+        return True
     if method not in ("GET", "HEAD"):
         return False
     if path == "/":
@@ -370,9 +400,10 @@ class DashboardGuard:
         # 1. Host, before anything else.
         hosts = headers.get("host", [])
         host = parse_host(hosts[0]) if len(hosts) == 1 else None
-        if host is None or not is_loopback(host):
+        if host is None or not _is_host_allowed(host):
             return await deny(400, "bad_host",
-                              "This dashboard only answers to localhost / 127.0.0.1.")
+                              "This dashboard only answers to localhost / 127.0.0.1 "
+                              "(or the configured SELLBIRD_CLOUD_HOST).")
         host_header = hosts[0].lower()
 
         # 2. Browser provenance.
@@ -381,7 +412,7 @@ class DashboardGuard:
                       and headers.get("sec-fetch-mode", [""])[0] == "navigate"
                       and headers.get("sec-fetch-dest", [""])[0] == "document")
         origins = headers.get("origin", [])
-        if origins and (len(origins) != 1 or origins[0].lower() != f"http://{host_header}"):
+        if origins and (len(origins) != 1 or not _is_origin_allowed(origins[0], host_header)):
             if not navigation:
                 return await deny(403, "cross_origin", "Cross-origin requests are refused.")
         site = headers.get("sec-fetch-site", [])

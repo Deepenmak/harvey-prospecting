@@ -389,6 +389,11 @@ class Brain:
                             "Non-retryable Claude error (auth). "
                             "Run 'claude login' and restart Sellbird."
                         )
+                        await self._record_status(
+                            "paused",
+                            "Claude session expired — run 'claude login' in the terminal.",
+                            kind="auth",
+                        )
                         return ""
                     continue  # retry transient failures
 

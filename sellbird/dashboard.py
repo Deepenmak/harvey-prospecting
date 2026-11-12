@@ -2426,15 +2426,25 @@ async def get_today():
         # Ordered by how much it blocks Sellbird from doing anything at all.
         brain = await _brain_status()
         if brain.get("status") == "paused":
-            who = "Codex" if brain.get("provider") == "codex" else "Sellbird's model"
-            items.append({
-                "key": "brain-paused", "tone": "bad",
-                "title": f"{who} is paused, so Sellbird is waiting",
-                "detail": (str(brain.get("reason") or "It can't be used right now.")[:300] +
-                           " Replies and queued emails are untouched; Sellbird resumes "
-                           "once it's fixed. sellbird status --check says what's wrong."),
-                "action": "Open the log", "tab": "controls",
-            })
+            if brain.get("kind") == "auth" and brain.get("provider") != "codex":
+                items.append({
+                    "key": "brain-paused", "tone": "bad",
+                    "title": "Claude session expired — Sellbird is waiting",
+                    "detail": ("Open the Terminal tab in Coolify (or your server terminal) "
+                               "and run 'claude login'. Sellbird resumes on the next heartbeat "
+                               "after you authenticate."),
+                    "action": "Open the log", "tab": "controls",
+                })
+            else:
+                who = "Codex" if brain.get("provider") == "codex" else "Sellbird's model"
+                items.append({
+                    "key": "brain-paused", "tone": "bad",
+                    "title": f"{who} is paused, so Sellbird is waiting",
+                    "detail": (str(brain.get("reason") or "It can't be used right now.")[:300] +
+                               " Replies and queued emails are untouched; Sellbird resumes "
+                               "once it's fixed. sellbird status --check says what's wrong."),
+                    "action": "Open the log", "tab": "controls",
+                })
 
         from sellbird.agents.writer import EMAIL_RULES_PROBLEM_KEY
         rules_problem = await state.get_setting(EMAIL_RULES_PROBLEM_KEY)
@@ -2905,13 +2915,39 @@ async def dashboard():
     return (WEB_DIR / "index.html").read_text(encoding="utf-8")
 
 
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+async def login_page():
+    login_html = WEB_DIR / "login.html"
+    if not login_html.exists():
+        raise HTTPException(404, "Login page not found.")
+    return login_html.read_text(encoding="utf-8")
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(request: Request):
+    import hmac as _hmac
+    username = (os.getenv("DASHBOARD_USER") or "").strip()
+    password = (os.getenv("DASHBOARD_PASS") or "").strip()
+    if not username or not password:
+        raise HTTPException(503, detail="Password auth not configured. Set DASHBOARD_USER and DASHBOARD_PASS.")
+    body = await request.json()
+    u = str(body.get("username") or "")
+    p = str(body.get("password") or "")
+    ok = (_hmac.compare_digest(u, username) and _hmac.compare_digest(p, password))
+    if not ok:
+        raise HTTPException(401, detail="Invalid credentials.")
+    return {"token": token_store.get()}
+
+
 class DashboardSetupError(Exception):
     """The dashboard can't start safely; the message says what to do."""
 
 
 def _check_loopback_bind(host: str) -> str:
-    """The host to bind, which must be a loopback address. The dashboard has
-    no remote-access mode: from another machine, use an SSH tunnel."""
+    """The host to bind.  Loopback only in local mode; 0.0.0.0 in cloud mode
+    (when SELLBIRD_CLOUD_HOST is set) so the container port is reachable."""
+    if os.getenv("SELLBIRD_CLOUD_HOST", "").strip():
+        return "0.0.0.0"
     name = (host or "").strip().lower()
     if name.startswith("[") and name.endswith("]"):
         name = name[1:-1]
@@ -2924,9 +2960,13 @@ def _check_loopback_bind(host: str) -> str:
 
 
 def dashboard_url(host: str = "127.0.0.1", port: int = 5555) -> str:
-    """The unlock link. The token rides in the #fragment, which browsers
-    never send to the server (so it stays out of logs and Referer); the
-    page moves it to sessionStorage and strips it from the address bar."""
+    """The unlock link (or the cloud URL when SELLBIRD_CLOUD_HOST is set).
+    In cloud mode no token fragment is included — users log in via /login."""
+    cloud = (os.getenv("SELLBIRD_CLOUD_HOST") or "").strip()
+    if cloud:
+        if "://" not in cloud:
+            cloud = f"https://{cloud}"
+        return cloud.rstrip("/")
     name = _check_loopback_bind(host)
     try:
         if ipaddress.ip_address(name).version == 6:
@@ -2999,7 +3039,8 @@ def start_dashboard(host: str = "127.0.0.1", port: int = 5555):
     from sellbird import dashboard_instance
     dashboard_instance.write(DB_PATH.parent, host=bind, port=port, instance=INSTANCE_ID)
     try:
+        cloud = bool(os.getenv("SELLBIRD_CLOUD_HOST", "").strip())
         uvicorn.run(app, host=bind, port=port, log_level="warning",
-                    proxy_headers=False, server_header=False, date_header=False)
+                    proxy_headers=cloud, server_header=False, date_header=False)
     finally:
         dashboard_instance.remove(DB_PATH.parent, instance=INSTANCE_ID)

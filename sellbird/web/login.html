@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="same-origin">
+<title>Sign in — Sellbird</title>
+<script src="/static/auth.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/sellbird-mark.svg" type="image/svg+xml">
+<style>
+  body { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .login-card { max-width: 400px; width: 100%; }
+  .login-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
+  .login-brand svg { width: 28px; height: 18px; }
+  .login-brand span { font-size: 1.1rem; font-weight: 600; letter-spacing: -0.01em; }
+  .login-error { display: none; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<div class="login-card card">
+  <div class="login-brand">
+    <svg viewBox="0 0 1040 640" aria-hidden="true"><path fill="currentColor" d="M83 0C246 47 417 91 562 157C676 209 759 258 744 314C813 257 896 239 954 301L1034 324L944 359C837 473 731 548 563 524C506 516 464 513 427 519L0 631L407 406L224 213L555 300L420 428L663 315L630 281C407 229 264 237 83 0Z"/></svg>
+    <span>Sellbird</span>
+  </div>
+
+  <h2 style="margin-bottom:24px">Sign in</h2>
+
+  <div id="login-error" class="banner banner-bad login-error" role="alert"></div>
+
+  <form id="login-form">
+    <div class="form-group">
+      <label class="form-label" for="username">Username</label>
+      <input type="text" class="form-input" id="username" autocomplete="username" autofocus spellcheck="false">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="password">Password</label>
+      <input type="password" class="form-input" id="password" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" type="submit" id="submit-btn" style="width:100%;margin-top:8px">Sign in</button>
+  </form>
+</div>
+
+<script>
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const err = document.getElementById('login-error');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  err.style.display = 'none';
+  try {
+    const resp = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+      credentials: 'omit',
+      mode: 'same-origin',
+      referrerPolicy: 'same-origin',
+    });
+    let data;
+    try { data = await resp.json(); } catch { data = {}; }
+    if (!resp.ok) {
+      err.textContent = data.detail || 'Invalid credentials.';
+      err.style.display = '';
+      return;
+    }
+    if (setAuthToken(data.token)) {
+      const next = new URLSearchParams(window.location.search).get('next') || '/';
+      // Only redirect to same-origin paths.
+      const safe = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+      window.location.href = safe;
+    } else {
+      err.textContent = 'Token error — try again.';
+      err.style.display = '';
+    }
+  } catch {
+    err.textContent = 'Network error — please try again.';
+    err.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+});
+</script>
+
+</body>
+</html>

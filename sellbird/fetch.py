@@ -14,10 +14,13 @@ One run = one segment from segments.yaml, or every segment (``mix``):
    exports/contacts_with_email.csv; no file per run), and append rows plus a
    run record to the Google Sheet.
 
-Free search shows only a company's name, never its industry or size, so a
-keyword tag alone lets misfits through. The judgement step sits between 2
-and 3: ``--plan`` writes the candidates to exports/plan.csv, Claude marks each one
-``a`` (strong fit), ``b`` (fit) or ``skip`` against optywise_icp.md, and
+Before searching people, a free org pre-search (``mixed_companies/api_search``)
+collects Apollo org IDs for the segment's industry + location + size. The
+people search then targets only those companies (``organization_ids`` filter),
+so every candidate is a confirmed ICP match. The judgement step sits between 2
+and 3: ``--plan`` writes the candidates to exports/plan.csv with employee count,
+industry and website pre-filled from Apollo, Claude marks each one ``a``
+(strong fit), ``b`` (fit) or ``skip`` against optywise_icp.md, and
 ``--from-plan`` spends credits on the kept rows only. Skipped companies go
 in the ledger so no later search offers them again.
 
@@ -60,7 +63,7 @@ MAX_SEARCH_PAGES = 5
 # A plan lists this many candidates per credit, so every skip has a stand-in.
 PLAN_RESERVE = 3
 PLAN_COLUMNS = ["segment", "apollo_id", "first_name", "title", "company",
-                "title_rank", "verdict", "reason"]
+                "employees", "industry", "website", "title_rank", "verdict", "reason"]
 # Plan verdicts that get a credit. "a" is a strong fit and scores higher.
 KEEP_VERDICTS = ("a", "b")
 
@@ -122,8 +125,15 @@ def search_filters(seg: dict) -> dict:
     }
     if seg.get("seniorities"):
         filters["person_seniorities"] = seg["seniorities"]
-    if seg.get("keyword_tags"):
-        filters["q_organization_keyword_tags"] = seg["keyword_tags"]
+    keyword_tags = list(seg.get("keyword_tags") or [])
+    if seg.get("technologies"):
+        # Apollo tags tech stack as keyword_tags — append without replacing.
+        keyword_tags += list(seg["technologies"])
+    if keyword_tags:
+        filters["q_organization_keyword_tags"] = keyword_tags
+    if seg.get("organization_ids"):
+        # Account-based: search only at pre-identified companies (free, no credits).
+        filters["organization_ids"] = seg["organization_ids"]
     return filters
 
 
@@ -492,14 +502,53 @@ async def _signals_for(state, company_ids: list[str],
     return out
 
 
+async def presearch_orgs(apollo, seg: dict, max_orgs: int = 300) -> list[str]:
+    """Free org pre-search: collect Apollo org IDs for the segment's industry
+    + location + size before the people search runs. The people search then
+    targets only those companies, so every candidate is a confirmed ICP match
+    rather than a name-and-title guess. Returns [] on any error so the caller
+    falls back to the broad search gracefully.
+    """
+    filters: dict = {
+        "organization_locations": seg.get("locations", []),
+        "organization_num_employees_ranges": seg.get("employees", []),
+    }
+    if seg.get("keyword_tags"):
+        filters["q_organization_keyword_tags"] = seg["keyword_tags"]
+    ids: list[str] = []
+    per_page = 100
+    for page in range(1, math.ceil(max_orgs / per_page) + 1):
+        try:
+            res = await apollo.search_organizations(filters, page=page, per_page=per_page)
+        except Exception as exc:
+            logger.warning("presearch_orgs page %d failed: %s", page, exc)
+            break
+        orgs = res.get("organizations") or []
+        ids.extend(o["id"] for o in orgs if o.get("id"))
+        if len(orgs) < per_page or len(ids) >= max_orgs:
+            break
+    logger.info("presearch_orgs: %d companies for segment %r", len(ids), seg.get("key"))
+    return ids[:max_orgs]
+
+
 async def _search(apollo, seg: dict, led: LedgerState, limit: int) -> tuple[list[dict], int]:
     """Up to ``limit`` new candidates for one segment, and how many people
     were searched. Pages on (free) until every pick has the segment's first
-    title or the results run out, so title order beats Apollo's own order."""
+    title or the results run out, so title order beats Apollo's own order.
+
+    Runs a free org pre-search first to narrow the people search to confirmed
+    ICP companies; falls back to the broad search if org pre-search returns
+    nothing.
+    """
     titles = seg.get("titles", [])
+    org_ids = list(seg.get("organization_ids") or [])
+    if not org_ids:
+        org_ids = await presearch_orgs(apollo, seg)
+    seg_with_orgs = dict(seg, organization_ids=org_ids) if org_ids else seg
+
     people: list[dict] = []
     for page in range(1, MAX_SEARCH_PAGES + 1):
-        res = await apollo.search_people(search_filters(seg), page=page)
+        res = await apollo.search_people(search_filters(seg_with_orgs), page=page)
         batch = res.get("people") or []
         people.extend(batch)
         picks = choose_candidates(people, titles, led.seen_ids, led.seen_orgs, limit)
@@ -516,10 +565,14 @@ def write_plan(groups: list[list[dict]], path: Path):
         w.writeheader()
         for group in groups:
             for p in group:
+                org = p.get("organization") or {}
                 w.writerow({"segment": p["_segment"], "apollo_id": p["id"],
                             "first_name": p.get("first_name", ""),
                             "title": p.get("title", ""),
-                            "company": p["organization"]["name"],
+                            "company": org.get("name", ""),
+                            "employees": org.get("estimated_num_employees") or "",
+                            "industry": org.get("industry") or "",
+                            "website": org.get("website_url") or org.get("primary_domain") or "",
                             "title_rank": p["_rank"], "verdict": "", "reason": ""})
 
 
@@ -573,7 +626,12 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
         groups = [[{"id": r["apollo_id"], "title": r["title"], "_segment": r["segment"],
                     "_verdict": r["verdict"].strip().lower(),
                     "_reason": (r.get("reason") or "").strip(),
-                    "organization": {"name": r["company"]}} for r in g] for g in groups]
+                    "organization": {
+                        "name": r["company"],
+                        "website_url": r.get("website") or "",
+                        "estimated_num_employees": r.get("employees") or "",
+                        "industry": r.get("industry") or "",
+                    }} for r in g] for g in groups]
 
     async with ApolloClient(apollo_key()) as apollo:
         if not from_plan:

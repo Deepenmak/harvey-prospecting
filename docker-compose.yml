@@ -1,33 +1,44 @@
 services:
   sellbird:
-    build:
-      context: .
-      args:
-        SELLBIRD_UID: ${SELLBIRD_UID:-${HARVEY_UID:-1000}}
-        SELLBIRD_GID: ${SELLBIRD_GID:-${HARVEY_GID:-1000}}
-    # Supported on native Linux. Keep the dashboard's loopback-only bind.
-    network_mode: host
-    command: ["dashboard"]
-    volumes:
-      # Mount the checkout directory, not individual config files: setup and
-      # training atomically replace files and create sellbird.local.yaml.
-      # Source, configuration, knowledge, and data therefore survive recreation.
-      # Sellbird reads .env itself; env_file would pin stale values at creation.
-      - type: bind
-        source: .
-        target: /app
-        bind:
-          create_host_path: false
-      # The Claude CLI refreshes OAuth tokens in place.
-      - type: bind
-        source: ${HOME}/.claude
-        target: /home/sellbird/.claude
-        bind:
-          create_host_path: false
+    build: .
     restart: unless-stopped
-    init: true
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+    ports:
+      - "5555:5555"
+    volumes:
+      - sellbird_data:/app/data
+      - sellbird_exports:/app/exports
+      # Claude Code credentials persist across restarts.
+      # Authenticate once via Coolify terminal: 'claude login'
+      - claude_home:/root/.claude
+    environment:
+      # ── Cloud deployment ──────────────────────────────────────────────────
+      # Your public hostname (no protocol, no trailing slash).
+      # Example: SELLBIRD_CLOUD_HOST=sellbird.optywise.com
+      SELLBIRD_CLOUD_HOST: ${SELLBIRD_CLOUD_HOST}
+
+      # Dashboard login credentials (set these in Coolify env vars)
+      DASHBOARD_USER: ${DASHBOARD_USER}
+      DASHBOARD_PASS: ${DASHBOARD_PASS}
+
+      # ── API keys ─────────────────────────────────────────────────────────
+      APOLLO_HARVEY_KEY: ${APOLLO_HARVEY_KEY}
+      INSTANTLY_API_KEY: ${INSTANTLY_API_KEY:-}
+
+      # Microsoft 365 OAuth (for mailbox)
+      M365_CLIENT_ID: ${M365_CLIENT_ID:-}
+      M365_TENANT_ID: ${M365_TENANT_ID:-}
+
+      # Gmail OAuth (alternative mailbox)
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID:-}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET:-}
+
+      # Optional enrichment / verification
+      REOON_API_KEY: ${REOON_API_KEY:-}
+      ZEROBOUNCE_API_KEY: ${ZEROBOUNCE_API_KEY:-}
+      HUNTER_API_KEY: ${HUNTER_API_KEY:-}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+
+volumes:
+  sellbird_data:
+  sellbird_exports:
+  claude_home:

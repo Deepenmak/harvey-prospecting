@@ -1,10 +1,12 @@
-"""Apollo.io: people search (free) and person enrichment (credits).
+"""Apollo.io: people search (free), org search (free) and enrichment (credits).
 
 Search (``mixed_people/api_search``) costs nothing but returns no email, no
-domain and an obfuscated last name. Enrichment (``people/match``) returns the
-full record and costs 1 credit when Apollo finds an email or demographics,
-0 when it finds nothing. So the pattern is: search wide, choose carefully,
-enrich only the people worth a credit.
+domain and an obfuscated last name. Org search (``mixed_companies/api_search``)
+is also free and returns industry, employee count, tech stack and website.
+Enrichment (``people/match``) returns the full person record and costs 1 credit
+when Apollo finds an email or demographics, 0 when it finds nothing.
+So the pattern is: search wide, choose carefully, enrich only the people worth
+a credit.
 
 Phones are never requested: a mobile number costs 8 extra credits.
 """
@@ -61,6 +63,26 @@ class ApolloClient:
         """Free search. Returns {'total_entries': int, 'people': [...]}."""
         payload = dict(filters, page=page, per_page=min(per_page, 100))
         return await self._post("mixed_people/api_search", payload)
+
+    async def search_organizations(self, filters: dict, page: int = 1,
+                                   per_page: int = 100) -> dict:
+        """Free org search. Returns {'total_entries': int, 'organizations': [...]}.
+
+        Each org includes: name, website_url, industry, estimated_num_employees,
+        primary_domain, technologies (tech stack), latest_funding_stage.
+        No credits consumed.
+        """
+        payload = dict(filters, page=page, per_page=min(per_page, 100))
+        return await self._post("mixed_companies/api_search", payload)
+
+    async def enrich_organization(self, domain: str) -> dict | None:
+        """Full org record by domain. Credits consumed varies by plan.
+
+        Returns tech stack, headcount growth, funding details, and more.
+        Only call for Tier A accounts where the extra signal is worth the cost.
+        """
+        data = await self._post("organizations/enrich", {"domain": domain})
+        return data.get("organization")
 
     async def enrich(self, person_id: str) -> dict | None:
         """Full record for one person. Costs a credit only if data is found."""
