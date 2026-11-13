@@ -8,8 +8,11 @@
 !LICENSE
 !requirements.txt
 !sellbird.yaml
+!.env.example
 !sellbird/
 !sellbird/**
+!harvey/
+!harvey/**
 !prompts/
 !prompts/**
 !skills/
