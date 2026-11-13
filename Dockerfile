@@ -19,8 +19,9 @@ COPY . .
 
 RUN pip install --no-cache-dir -e .
 
-# Install Playwright browser
-RUN python -m playwright install chromium --with-deps
+# Playwright chromium is NOT installed here — only needed for LinkedIn
+# prospecting. Run 'python -m playwright install chromium --with-deps'
+# from the Coolify terminal if you ever enable LinkedIn.
 
 # Persistent-data directories (overridden by mounted volumes)
 RUN mkdir -p data exports
