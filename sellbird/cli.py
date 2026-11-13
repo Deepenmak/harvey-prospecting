@@ -523,7 +523,8 @@ def cmd_fetch(args):
                 print("\n  Dry run: nothing enriched, no credits spent.\n")
             return
         print(f"  Enriched {report.enriched}, credits used {report.credits_used}, "
-              f"{report.credits_left} left in this phase")
+              + (f"{report.credits_left} left in this phase" if report.cap
+                 else "no phase cap"))
         for r in report.rows:
             print(f"    {r['score']:>3}  {r['title']} at {r['company']} "
                   f"[{r['email_status']}]" + (f"  hiring: {r['hiring_roles']}"

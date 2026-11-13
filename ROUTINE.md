@@ -54,7 +54,7 @@ The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
 2. Run the lead-gen skill (.claude/skills/lead-gen/SKILL.md) as if invoked
    with `<per_run_credits from segments.yaml> mix --yes`, phases 0 to 7.
    Skip the sheet step. Research at most the top 10 new leads. If fetch
-   reports "stopped" (the credit cap is reached), skip to step 4.
+   reports "stopped" (no credits available for the run), skip to step 4.
 3. Export. `python .claude/skills/lead-gen/scripts/dashboard_sync.py export exports/dashboard`.
    Upload exports/dashboard/contacts.json and runs.json to the dashboard,
    one Artifact call each (`url` the dashboard, `file_path`, `asset: true`).
@@ -62,7 +62,7 @@ The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
    (pin `if_version` from step 1) with the new `source.url`, `source.name`
    and `updated: {at: <ISO time now>, by: "Claude scheduled run"}`. Then
    delete the two old assets (Artifact `action: delete`, `path: <old id>`).
-4. Report in the run summary: credits used this run and left in the phase,
+4. Report in the run summary: credits used this run,
    new contacts per segment, how many show buying intent, the top five new
    leads with their angle, companies skipped and why, and any errors. If a
    Gmail tool is available, send the same summary with the dashboard link
@@ -74,5 +74,6 @@ Never edit segments.yaml or the credit cap. Never commit or push.
 ```
 
 Each run spends `per_run_credits` (10), shared across the five segments.
-Once the ledger reaches `phase_credit_cap` in segments.yaml every run stops
-itself before spending, until the cap is raised.
+There is no phase cap (`phase_credit_cap: 0` in segments.yaml), so runs keep
+fetching every weekday; the per-run budget is the only limit. Setting
+`phase_credit_cap` to a number puts the lifetime hard stop back.

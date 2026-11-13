@@ -71,8 +71,10 @@ ICP file: `optywise_icp.md` unless the user names another. Read it and
    (restored from the dashboard in a cloud run). If `SHEET_WEBHOOK_URL` is
    set, prefix every `H fetch` with `SHEET_WEBHOOK_URL=` so the local ledger
    is used.
-4. Credits left = `phase_credit_cap` minus the ledger's used credits. If the
-   requested credits exceed that, say so and use the smaller number.
+4. Credits left: when `phase_credit_cap` is non-zero, it's the cap minus the
+   ledger's used credits, and if the requested credits exceed that, say so and
+   use the smaller number. When it's 0 there is no phase cap and the requested
+   credits stand.
 
 ## Phase 1: plan (free)
 

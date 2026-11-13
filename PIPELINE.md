@@ -14,7 +14,7 @@ Status as of 2026-11-02.
 |---|---|---|
 | `sellbird/` | Python package: fetch engine, adapters, send guards, heartbeat agents | Sellbird CLI, `sellbird run` |
 | `optywise_icp.md` | Who we sell to and why: segments, buyers, disqualifiers | Claude agents, the lead-gen skill |
-| `segments.yaml` | Apollo search targets, credits per run, the credit cap | `sellbird fetch` |
+| `segments.yaml` | Apollo search targets, credits per run, the optional credit cap (0 = none) | `sellbird fetch` |
 | `sellbird.yaml`, `sellbird.local.yaml` | Sender identity, limits, quiet hours, approval mode | Sellbird (local file wins) |
 | `skills/*.md` | **Knowledge**: what to know (product, offer, signals, email rules, objections) | Sellbird's heartbeat agents via `brain.py`, and Claude agents by path |
 | `prompts/*.md` | Instructions for Sellbird's heartbeat agents | `brain.py` |

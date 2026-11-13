@@ -5,9 +5,11 @@ One run = one segment from segments.yaml, or every segment (``mix``):
 1. Search Apollo (free) for people matching the segment.
 2. Drop anyone already fetched or skipped (the ledger), keep one person per
    company, and rank by the segment's title order.
-3. Enrich the top N (1 credit each when an email is found), never past
-   ``phase_credit_cap`` across all runs. With ``mix`` the credits go round
-   the segments in turn, so one run covers every segment.
+3. Enrich the top N (1 credit each when an email is found). A non-zero
+   ``phase_credit_cap`` is a hard stop across all runs; 0 (the default)
+   means no phase cap and only the per-run budget applies. With ``mix``
+   the credits go round the segments in turn, so one run covers every
+   segment.
 4. Store companies and prospects in Sellbird's database, read each company's
    own site (free) for hiring and tech-stack signals, and score.
 5. Fold the rows into the two contact files (exports/contacts_all.csv and
@@ -457,6 +459,7 @@ class FetchReport:
     enriched: int = 0
     credits_used: int = 0
     credits_left: int = 0
+    cap: int = 0
     rows: list[dict] = field(default_factory=list)
     csv_path: str = ""
     ledger: str = ""
@@ -602,15 +605,18 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     by_key = {s["key"]: s for s in spec["segments"]}
     segs = (spec["segments"] if segment == "mix"
             else [pick_segment(spec, segment, led.last_segment)])
-    cap = int(spec.get("phase_credit_cap", 0))
+    # 0 or missing = no phase cap: the per-run budget is the only limit.
+    cap = int(spec.get("phase_credit_cap", 0) or 0)
     budget = credits if credits is not None else int(spec.get("per_run_credits", 10))
-    left = max(0, cap - led.credits_used)
-    budget = min(budget, left)
+    left = max(0, cap - led.credits_used) if cap > 0 else budget
+    if cap > 0:
+        budget = min(budget, left)
 
     report = FetchReport(segment="mix" if len(segs) > 1 else segs[0]["key"],
-                         credits_left=left, ledger=type(ledger).__name__)
+                         credits_left=left, cap=cap, ledger=type(ledger).__name__)
     if budget <= 0:
-        report.stopped = f"credit cap reached ({led.credits_used}/{cap} used)"
+        report.stopped = (f"credit cap reached ({led.credits_used}/{cap} used)"
+                          if cap > 0 else "budget for this run is 0 credits")
         return report
 
     skipped: list[str] = []

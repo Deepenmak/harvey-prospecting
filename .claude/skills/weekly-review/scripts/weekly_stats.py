@@ -35,8 +35,9 @@ def main() -> None:
     spec = load_segments()
     used = sum(r.get("credits_used", 0) for r in ledger.get("runs", []))
     cap, per_run = spec.get("phase_credit_cap", 0), spec.get("per_run_credits", 0)
-    print(f"\nCredits: {used} of {cap} used, {max(cap - used, 0)} left, "
-          f"{per_run} per run.")
+    print(f"\nCredits: {used} used, "
+          + (f"{max(cap - used, 0)} of {cap} left, " if cap else "no phase cap, ")
+          + f"{per_run} per run.")
     print(f"Companies skipped so far: {len(ledger.get('skipped_orgs', []))}")
     print("Replies: none tracked yet (sending hasn't started).")
 

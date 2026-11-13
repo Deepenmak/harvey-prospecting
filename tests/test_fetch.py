@@ -232,6 +232,59 @@ def test_cloud_run_refuses_without_a_restored_ledger(tmp_path, monkeypatch):
     assert report.credits_used == 0
 
 
+def _nocap_setup(monkeypatch, tmp_path, cap, used):
+    """run_fetch with a stubbed Apollo and a ledger that already spent ``used``."""
+    import sellbird.fetch as fetch
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
+    ledger_path = tmp_path / "ledger.json"
+    ledger_path.write_text(json.dumps(
+        {"runs": [{"segment": "us_insurance", "credits_used": used, "seen_ids": []}],
+         "seen_ids": [], "seen_orgs": [], "skipped_orgs": []}), encoding="utf-8")
+    monkeypatch.setattr(fetch, "make_ledger", lambda: fetch.FileLedger(ledger_path))
+
+    spec = dict(fetch.load_segments(), phase_credit_cap=cap, per_run_credits=10)
+    monkeypatch.setattr(fetch, "load_segments", lambda *a, **k: spec)
+    monkeypatch.setattr(fetch, "apollo_key", lambda: "test-key")
+
+    class FakeApollo:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(fetch, "ApolloClient", FakeApollo)
+
+    async def no_results(apollo, seg, led, limit):
+        return [], 0
+
+    monkeypatch.setattr(fetch, "_search", no_results)
+    return fetch
+
+
+def test_zero_cap_means_no_phase_cap(tmp_path, monkeypatch):
+    # The ledger has spent far more than the old cap; with phase_credit_cap 0
+    # the run still gets its per-run budget.
+    fetch = _nocap_setup(monkeypatch, tmp_path, cap=0, used=500)
+    report = asyncio.run(fetch.run_fetch(None, None, segment="us_insurance",
+                                         dry_run=True))
+    assert report.stopped == ""
+    assert report.cap == 0
+
+
+def test_non_zero_cap_still_stops_the_run(tmp_path, monkeypatch):
+    fetch = _nocap_setup(monkeypatch, tmp_path, cap=80, used=80)
+    report = asyncio.run(fetch.run_fetch(None, None, segment="us_insurance",
+                                         dry_run=True))
+    assert report.stopped.startswith("credit cap reached")
+    assert report.credits_used == 0
+
+
 def test_helpers():
     assert domain_of("https://www.example.com/about") == "example.com"
     assert email_status("verified") == "verified"

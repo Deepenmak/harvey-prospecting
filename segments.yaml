@@ -1,9 +1,11 @@
 # Apollo sourcing segments for `sellbird fetch`. Order = rotation order.
 # Reasoning behind each segment: optywise_icp.md.
 
-# Hard stop for this phase: fetch refuses to spend past it (the ledger is
-# data/fetch_ledger.json, restored from the leads dashboard in cloud runs).
-phase_credit_cap: 80
+# Optional hard stop across all runs: fetch refuses to spend past it (the
+# ledger is data/fetch_ledger.json, restored from the leads dashboard in
+# cloud runs). 0 = no phase cap, so the only limit is the per-run budget
+# below; set a number here to put the hard stop back.
+phase_credit_cap: 0
 # Default spend per run. One enrichment that finds an email = 1 credit.
 per_run_credits: 10
 
