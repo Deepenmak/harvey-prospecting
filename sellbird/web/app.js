@@ -1392,24 +1392,63 @@ function saveCloudflare() {
   saveEnv(payload, 'Cloudflare credentials saved.');
 }
 
-// Import a contact list fetched elsewhere. The files are read here in the
-// browser and sent as one JSON body: nothing is uploaded to anyone else.
+// ── Import contacts: a list fetched somewhere else, as JSON ──
+//
+// A cloud run, another machine or the leads dashboard produces a contact list
+// this workspace has never seen. The files are read here in the browser and
+// sent as one JSON body: nothing is uploaded to anyone else, nothing is spent
+// and nothing is sent to a prospect.
+
+function openImportContacts() {
+  const d = document.getElementById('import-dialog');
+  d.innerHTML =
+    '<div class="modal-head"><div><h3 id="import-dialog-title">Import contacts</h3>' +
+      '<div class="sub">JSON from a Sellbird export: every contact with its research, fit and angle. ' +
+      'Contacts already here are updated, never duplicated, and their status is left alone.</div></div>' +
+      '<button class="btn btn-ghost btn-sm btn-icon" onclick="closeImportDialog()" aria-label="Close">' + icon('close') + '</button></div>' +
+    '<div class="modal-body">' +
+      '<div class="form-group"><label class="form-label" for="import-contacts-file">Contacts file (.json)</label>' +
+        '<input type="file" class="form-input" id="import-contacts-file" accept=".json,application/json">' +
+        '<p class="desc">A file wins over anything pasted below.</p></div>' +
+      '<div class="form-group"><label class="form-label" for="import-runs-file">Ledger file (runs.json, optional)</label>' +
+        '<input type="file" class="form-input" id="import-runs-file" accept=".json,application/json">' +
+        '<p class="desc">Carries the credits already spent and the people a fetch has seen, so the next run does not pay for them twice.</p></div>' +
+      '<div class="form-group"><label class="form-label" for="import-contacts-paste">Or paste the JSON</label>' +
+        '<textarea class="form-input" id="import-contacts-paste" rows="6" spellcheck="false" ' +
+        'placeholder="Paste the contacts JSON here: a list of contacts, or the whole export object."></textarea></div>' +
+      '<p class="desc" id="import-contacts-result" role="status"></p>' +
+    '</div>' +
+    '<div class="modal-foot"><button class="btn btn-ghost" onclick="closeImportDialog()">Cancel</button>' +
+      '<button class="btn btn-primary" id="import-contacts-go" onclick="importContacts()">Import</button></div>';
+  if (!d.open) d.showModal();
+}
+
+function closeImportDialog() {
+  const d = document.getElementById('import-dialog');
+  if (d.open) d.close();
+}
+
 async function importContacts() {
   const el = document.getElementById('import-contacts-result');
   const go = document.getElementById('import-contacts-go');
   const file = (document.getElementById('import-contacts-file').files || [])[0];
   const runsFile = (document.getElementById('import-runs-file').files || [])[0];
-  if (!file) { el.textContent = 'Choose a contacts .json file first.'; return; }
+  const pasted = document.getElementById('import-contacts-paste').value.trim();
+  if (!file && !pasted) { el.textContent = 'Choose a .json file, or paste the JSON.'; return; }
   go.disabled = true;
-  el.textContent = 'Reading ' + file.name + '…';
+  el.textContent = file ? 'Reading ' + file.name + '…' : 'Reading…';
   let payload;
   try {
-    payload = {contacts: JSON.parse(await file.text())};
-    if (Array.isArray(payload.contacts.contacts)) payload.contacts = payload.contacts.contacts;
+    payload = {contacts: JSON.parse(file ? await file.text() : pasted)};
+    // A whole export object ({contacts, runs}) pastes in as readily as a list.
+    if (payload.contacts && Array.isArray(payload.contacts.contacts)) {
+      if (Array.isArray(payload.contacts.runs)) payload.runs = payload.contacts.runs;
+      payload.contacts = payload.contacts.contacts;
+    }
     if (runsFile) payload.runs = JSON.parse(await runsFile.text());
   } catch (e) {
     go.disabled = false;
-    el.textContent = 'That file is not valid JSON.';
+    el.textContent = 'That is not valid JSON.';
     return;
   }
   el.textContent = 'Importing…';
@@ -1421,6 +1460,8 @@ async function importContacts() {
   if (data && data.success) {
     el.textContent = data.message || 'Imported.';
     showToast(data.message || 'Contacts imported', 'success');
+    closeImportDialog();
+    loadProspects();
     loadToday();
   } else {
     el.textContent = failMsg(data, 'Could not import that list.');
@@ -2242,7 +2283,8 @@ async function loadProspects() {
   _prospects = data;
   if (!data.length) {
     el.innerHTML = emptyState(icon('contacts'), 'No contacts yet',
-      'Sellbird hasn\'t found any prospects. Once it\'s running, the Scout agent searches the web for people matching your ideal customer profile in <b>sellbird.yaml</b>.');
+      'Sellbird hasn\'t found any prospects. Once it\'s running, the Scout agent searches the web for people matching your ideal customer profile in <b>sellbird.yaml</b>. ' +
+      'Already have a list from elsewhere? <a href="#" onclick="openImportContacts();return false">Import it as JSON</a>.');
     return;
   }
   if (!document.getElementById('contact-rows')) {

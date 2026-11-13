@@ -261,12 +261,15 @@
   <div class="section-head">
     <div><h2>Contacts</h2><p>People Sellbird has found, how sure it is of their address, and where each one stands.</p></div>
     <div class="page-actions">
+      <button class="btn btn-secondary btn-sm" onclick="openImportContacts()"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Import JSON</button>
       <button class="btn btn-secondary btn-sm" onclick="downloadCsv('/api/export/prospects.csv', 'prospects.csv', this)"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Export deliverable</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadCsv('/api/export/prospects.csv?all=true', 'prospects-all.csv', this)">Export all</button>
     </div>
   </div>
   <div id="prospects-table"></div>
 </div>
+
+<dialog id="import-dialog" class="modal" aria-labelledby="import-dialog-title"></dialog>
 
 <!-- Campaigns -->
 <div id="campaigns" class="section">
@@ -473,19 +476,10 @@
     <div class="settings-row">
       <div>
         <h3>Import contacts</h3>
-        <p class="desc">A contact list fetched somewhere else, as JSON: every contact, with the research, fit and angle already on it. It lands in the Contacts tab and in the contact files. Nothing is spent and nothing is sent.</p>
+        <p class="desc">A contact list fetched somewhere else, as JSON. It lives on the Contacts tab: <b>Contacts &rarr; Import JSON</b>.</p>
       </div>
       <div class="fields">
-        <div class="form-group">
-          <label class="form-label" for="import-contacts-file">Contacts file (.json)</label>
-          <input type="file" class="form-input" id="import-contacts-file" accept=".json,application/json">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="import-runs-file">Ledger file (runs.json, optional)</label>
-          <input type="file" class="form-input" id="import-runs-file" accept=".json,application/json">
-        </div>
-        <button class="btn btn-primary btn-sm" id="import-contacts-go" onclick="importContacts()">Import</button>
-        <p class="desc" id="import-contacts-result"></p>
+        <button class="btn btn-secondary btn-sm" onclick="showTab('prospects', null); openImportContacts()">Open it</button>
       </div>
     </div>
   </div>
