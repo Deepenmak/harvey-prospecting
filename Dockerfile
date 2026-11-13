@@ -35,9 +35,18 @@ RUN set -eux; \
 RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code \
     && npm cache clean --force
 
+# Dependencies first, from requirements.txt alone, so this layer is cached
+# and a code change never re-downloads them. pip's default 15s socket timeout
+# and 5 retries are not enough on this deployment server's network, so both
+# are raised: a slow mirror now waits instead of failing the whole build.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
+
 COPY . .
 
-RUN pip install --no-cache-dir -e .
+# The project itself. --no-deps because requirements.txt already installed
+# them above, so this touches the network not at all.
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Playwright chromium is NOT installed here — only needed for LinkedIn
 # prospecting. Run 'python -m playwright install chromium --with-deps'
