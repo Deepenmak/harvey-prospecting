@@ -16,7 +16,7 @@ ENV NODE_VERSION=20.18.1
 RUN set -eux; \
     echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries; \
     apt-get update; \
-    apt-get install -y --no-install-recommends curl ca-certificates git; \
+    apt-get install -y --no-install-recommends curl ca-certificates git xz-utils; \
     rm -rf /var/lib/apt/lists/*; \
     case "$(dpkg --print-architecture)" in \
       amd64) node_arch=x64 ;; \
