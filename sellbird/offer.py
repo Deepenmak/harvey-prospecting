@@ -15,6 +15,7 @@ Sellbird helps design it instead of picking it alone:
 import copy
 import json
 import logging
+import os
 from pathlib import Path
 
 import yaml
@@ -169,7 +170,10 @@ PROPOSED_KEY = "offer_proposed"
 EDITABLE = {
     "product": {"name": str, "description": str, "pricing": str, "key_benefits": list,
                 "objection_responses": dict},
-    "persona": {"name": str, "role": str, "tone": str},
+    # company and email are editable because a cloud deployment never runs the
+    # terminal wizard, and the heartbeat refuses to start while persona.company
+    # is still the template's "Your Company" (main.py _needs_setup).
+    "persona": {"name": str, "role": str, "tone": str, "company": str, "email": str},
     "icp": {"industries": list, "titles": list, "company_size": str, "geography": list},
     "offer": {"entry": str},
 }
@@ -183,6 +187,45 @@ def _skill_text(root: Path, name: str) -> str:
         return read_user_text(path)
     except OSError:
         return ""
+
+
+# Long enough for a real product brief with examples; past this it is
+# probably the wrong file and would crowd the facts out of every prompt.
+MAX_KNOWLEDGE_CHARS = 40_000
+# The free-text knowledge the agents read, by the key company_view returns it
+# under. These hold what a public repo must never carry: real positioning,
+# pricing detail, named competitors, account notes. They live in the home
+# folder (a mounted volume in Docker), so they are never committed or baked
+# into an image.
+KNOWLEDGE_FILES = {"knowledge": "product_knowledge", "competitors": "competitive_intel"}
+
+
+def save_knowledge(root: Path, kind: str, text: str) -> Path:
+    """Write one knowledge file, replacing it atomically.
+
+    Empty text removes the file's contents rather than deleting it, so the
+    agents simply see nothing instead of a missing-file error.
+    """
+    name = KNOWLEDGE_FILES.get(kind)
+    if not name:
+        raise ValueError(f"'{kind}' isn't a knowledge file")
+    if not isinstance(text, str):
+        raise ValueError("expected text")
+    text = text.replace("\r\n", "\n").strip()
+    if len(text) > MAX_KNOWLEDGE_CHARS:
+        raise ValueError(
+            f"that's {len(text):,} characters; the limit is {MAX_KNOWLEDGE_CHARS:,}")
+    skills = Path(root) / "skills"
+    skills.mkdir(parents=True, exist_ok=True)
+    path = skills / f"{name}.md"
+    if path.is_symlink():
+        raise ValueError(f"{path.name} is a symbolic link; edit it by hand")
+    if path.exists() and not path.is_file():
+        raise ValueError(f"{path.name} isn't a regular file")
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text + ("\n" if text else ""), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
 
 
 def company_view(config, root: Path, proposed: dict | None = None) -> dict:

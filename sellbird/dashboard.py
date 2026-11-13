@@ -674,6 +674,35 @@ async def save_company_route(request: Request):
     return {"success": True, "message": "Saved. New emails use it from the next draft."}
 
 
+@app.post("/api/company/knowledge")
+async def save_company_knowledge(request: Request):
+    """Save one free-text knowledge file (product knowledge, competitors).
+
+    This is how a deployment whose Git repo is public gets its real company
+    detail: it is typed here, not committed. The files are written under
+    SELLBIRD_HOME, which is a mounted volume, so they survive a redeploy and
+    never reach the image or the repo.
+    """
+    from sellbird.offer import save_knowledge
+    body = await request.json() if request.headers.get(
+        "content-type", "").startswith("application/json") else {}
+    kind = str((body or {}).get("kind") or "")
+    text = (body or {}).get("text")
+    if not isinstance(text, str):
+        return JSONResponse({"success": False, "message": "Nothing to save."},
+                            status_code=400)
+    try:
+        save_knowledge(PROJECT_ROOT, kind, text)
+    except ValueError as e:
+        return JSONResponse({"success": False, "message": f"Not saved: {e}."},
+                            status_code=400)
+    except Exception as e:
+        logger.warning("Could not save knowledge file: %s", e)
+        return JSONResponse({"success": False, "message": "Could not write the file."},
+                            status_code=500)
+    return {"success": True, "message": "Saved. Agents read it on their next run."}
+
+
 @app.post("/api/offer/propose")
 async def propose_offer(request: Request):
     """Your agent's proposed offer, waiting for you to use or dismiss it on
@@ -2929,14 +2958,32 @@ async def api_auth_login(request: Request):
     username = (os.getenv("DASHBOARD_USER") or "").strip()
     password = (os.getenv("DASHBOARD_PASS") or "").strip()
     if not username or not password:
-        raise HTTPException(503, detail="Password auth not configured. Set DASHBOARD_USER and DASHBOARD_PASS.")
-    body = await request.json()
+        return JSONResponse(
+            {"error": "not_configured",
+             "message": "Dashboard login isn't configured. Set DASHBOARD_USER and "
+                        "DASHBOARD_PASS on the server, then redeploy."},
+            status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "bad_request", "message": "Invalid request body."},
+                            status_code=400)
     u = str(body.get("username") or "")
     p = str(body.get("password") or "")
-    ok = (_hmac.compare_digest(u, username) and _hmac.compare_digest(p, password))
-    if not ok:
-        raise HTTPException(401, detail="Invalid credentials.")
-    return {"token": token_store.get()}
+    # Both halves are always compared, so the reply takes the same time
+    # whether it was the name or the password that was wrong.
+    name_ok = _hmac.compare_digest(u.encode("utf-8"), username.encode("utf-8"))
+    pass_ok = _hmac.compare_digest(p.encode("utf-8"), password.encode("utf-8"))
+    if not (name_ok and pass_ok):
+        return JSONResponse({"error": "unauthorized", "message": "Invalid credentials."},
+                            status_code=401)
+    try:
+        return {"token": token_store.get()}
+    except auth.TokenError as e:
+        return JSONResponse({"error": "token_unavailable", "message": str(e)},
+                            status_code=503)
 
 
 class DashboardSetupError(Exception):

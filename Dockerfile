@@ -23,8 +23,14 @@ RUN pip install --no-cache-dir -e .
 # prospecting. Run 'python -m playwright install chromium --with-deps'
 # from the Coolify terminal if you ever enable LinkedIn.
 
-# Persistent-data directories (overridden by mounted volumes)
-RUN mkdir -p data exports
+# Everything that must survive a redeploy -- config, .env, skills, prompts,
+# the database and exports -- lives under SELLBIRD_HOME, which is a mounted
+# volume. The image itself stays stateless, so nothing private is ever baked
+# into it or pushed to the public repo. start.sh seeds this folder on first
+# boot from the template files in /app.
+ENV SELLBIRD_HOME=/config
+RUN mkdir -p /config/data /config/exports /config/skills /config/prompts
+VOLUME ["/config"]
 
 EXPOSE 5555
 

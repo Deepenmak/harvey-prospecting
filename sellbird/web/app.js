@@ -3219,12 +3219,16 @@ async function loadCompany() {
 
   <section class="card company-card" aria-labelledby="co-sender-h">
     <div class="company-card-head"><h3 id="co-sender-h">Who it's from</h3>
-      <span class="hint">${ce(s.company)}${s.email ? ' · ' + ce(s.email) : ''}</span></div>
+      <span class="hint">Sellbird will not start until the company name is yours</span></div>
     <div class="company-grid">
       <div class="form-group"><label class="form-label" for="co-s-name">Sender name <span class="hint">signed under every email</span></label>
         <input class="form-input" id="co-s-name" value="${ce(s.name)}"></div>
       <div class="form-group"><label class="form-label" for="co-s-role">Role</label>
         <input class="form-input" id="co-s-role" value="${ce(s.role)}"></div>
+      <div class="form-group"><label class="form-label" for="co-s-company">Company</label>
+        <input class="form-input" id="co-s-company" value="${ce(s.company)}"></div>
+      <div class="form-group"><label class="form-label" for="co-s-email">Reply-to email</label>
+        <input class="form-input" id="co-s-email" value="${ce(s.email)}"></div>
     </div>
     <div class="form-group"><label class="form-label" for="co-s-tone">Tone</label>
       <input class="form-input" id="co-s-tone" value="${ce(s.tone)}"></div>
@@ -3243,12 +3247,17 @@ async function loadCompany() {
     </div>
   </section>
 
-  ${data.knowledge || data.competitors ? `<section class="card company-card" aria-labelledby="co-learned-h">
-    <div class="company-card-head"><h3 id="co-learned-h">What Sellbird learned from your site</h3>
-      <span class="hint">From training. Retrain with <code>sellbird train &lt;url&gt;</code></span></div>
-    ${data.knowledge ? `<details class="company-learned"><summary>Product knowledge</summary><pre>${ce(data.knowledge)}</pre></details>` : ''}
-    ${data.competitors ? `<details class="company-learned"><summary>Competitors</summary><pre>${ce(data.competitors)}</pre></details>` : ''}
-  </section>` : ''}`;
+  <section class="card company-card" aria-labelledby="co-learned-h">
+    <div class="company-card-head"><h3 id="co-learned-h">Private company notes</h3>
+      <span class="hint">Stored on this server only</span></div>
+    <p class="desc">Everything the agents should know that does not belong in a public code repository: real positioning, pricing detail, named competitors, who you have already spoken to. Paste it here. It is saved to this server's own storage, never to Git, and it survives redeploys.</p>
+    <div class="form-group"><label class="form-label" for="co-knowledge">Product knowledge <span class="hint">what you sell, in your words</span></label>
+      <textarea class="form-input" id="co-knowledge" rows="14" placeholder="What the product does, who it is for, the proof you can point to, pricing, how a deal usually closes...">${ce(data.knowledge || '')}</textarea></div>
+    <div class="offer-actions"><button class="btn btn-primary btn-sm" onclick="saveKnowledge('knowledge')">Save product knowledge</button></div>
+    <div class="form-group"><label class="form-label" for="co-competitors">Competitors <span class="hint">who you are up against, and how you win</span></label>
+      <textarea class="form-input" id="co-competitors" rows="10" placeholder="Who else they are looking at, where each one is weak, what to say when a prospect names them...">${ce(data.competitors || '')}</textarea></div>
+    <div class="offer-actions"><button class="btn btn-primary btn-sm" onclick="saveKnowledge('competitors')">Save competitors</button></div>
+  </section>`;
   _offerIdeas = (o.entry_ideas || []).map(x => ({offer: x}));
   renderOfferIdeas();
   const badge = document.getElementById('nav-company');
@@ -3286,12 +3295,23 @@ async function saveCompanySection(section, objectionsOnly) {
     fields = {industries: splitLines(v('co-i-industries')), titles: splitLines(v('co-i-titles')),
               company_size: v('co-i-size'), geography: splitLines(v('co-i-geo'))};
   } else if (section === 'persona') {
-    fields = {name: v('co-s-name'), role: v('co-s-role'), tone: v('co-s-tone')};
+    fields = {name: v('co-s-name'), role: v('co-s-role'), tone: v('co-s-tone'),
+              company: v('co-s-company'), email: v('co-s-email')};
   }
   const r = await api('/api/company', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                        body: JSON.stringify({section, fields})});
   if (r && r.success) showToast(r.message, 'success');
   else showToast((r && r.message) || 'Couldn\'t save.', 'error');
+}
+
+async function saveKnowledge(kind) {
+  const el = document.getElementById(kind === 'knowledge' ? 'co-knowledge' : 'co-competitors');
+  if (!el) return;
+  const r = await api('/api/company/knowledge', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({kind, text: el.value})});
+  if (r && r.success) showToast(r.message, 'success');
+  else showToast((r && r.message) || 'Could not save.', 'error');
 }
 
 function renderOfferIdeas() {

@@ -5,23 +5,28 @@ services:
     ports:
       - "5555:5555"
     volumes:
-      - sellbird_data:/app/data
-      - sellbird_exports:/app/exports
-      # Claude Code credentials persist across restarts.
-      # Authenticate once via Coolify terminal: 'claude login'
+      # Everything private and everything stateful lives here: sellbird.local.yaml,
+      # .env, skills/, prompts/, data/sellbird.db and exports/. Nothing private is
+      # in the image or in the (public) Git repo, and a redeploy never wipes it.
+      - sellbird_config:/config
+      # Claude Code credentials, so 'claude login' is done once, not per deploy.
       - claude_home:/root/.claude
     environment:
       # ── Cloud deployment ──────────────────────────────────────────────────
-      # Your public hostname (no protocol, no trailing slash).
-      # Example: SELLBIRD_CLOUD_HOST=sellbird.optywise.com
+      # Your public hostname (no protocol, no trailing slash). Without it the
+      # dashboard answers only to localhost and the public URL returns
+      # "bad_host". Coolify shows the hostname on the resource's Domains field.
       SELLBIRD_CLOUD_HOST: ${SELLBIRD_CLOUD_HOST}
 
-      # Dashboard login credentials (set these in Coolify env vars)
+      # Dashboard login. The app is on a public URL, so this is what stops
+      # strangers reading your pipeline.
       DASHBOARD_USER: ${DASHBOARD_USER}
       DASHBOARD_PASS: ${DASHBOARD_PASS}
 
       # ── API keys ─────────────────────────────────────────────────────────
-      APOLLO_HARVEY_KEY: ${APOLLO_HARVEY_KEY}
+      # Optional here: all of these can also be typed into the dashboard's
+      # Settings tab, which writes them to /config/.env on the volume.
+      APOLLO_HARVEY_KEY: ${APOLLO_HARVEY_KEY:-}
       INSTANTLY_API_KEY: ${INSTANTLY_API_KEY:-}
 
       # Microsoft 365 OAuth (for mailbox)
@@ -39,6 +44,5 @@ services:
       SERPER_API_KEY: ${SERPER_API_KEY:-}
 
 volumes:
-  sellbird_data:
-  sellbird_exports:
+  sellbird_config:
   claude_home:
