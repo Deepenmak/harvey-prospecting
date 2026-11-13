@@ -1392,6 +1392,42 @@ function saveCloudflare() {
   saveEnv(payload, 'Cloudflare credentials saved.');
 }
 
+// Import a contact list fetched elsewhere. The files are read here in the
+// browser and sent as one JSON body: nothing is uploaded to anyone else.
+async function importContacts() {
+  const el = document.getElementById('import-contacts-result');
+  const go = document.getElementById('import-contacts-go');
+  const file = (document.getElementById('import-contacts-file').files || [])[0];
+  const runsFile = (document.getElementById('import-runs-file').files || [])[0];
+  if (!file) { el.textContent = 'Choose a contacts .json file first.'; return; }
+  go.disabled = true;
+  el.textContent = 'Reading ' + file.name + '…';
+  let payload;
+  try {
+    payload = {contacts: JSON.parse(await file.text())};
+    if (Array.isArray(payload.contacts.contacts)) payload.contacts = payload.contacts.contacts;
+    if (runsFile) payload.runs = JSON.parse(await runsFile.text());
+  } catch (e) {
+    go.disabled = false;
+    el.textContent = 'That file is not valid JSON.';
+    return;
+  }
+  el.textContent = 'Importing…';
+  const data = await api('/api/contacts/import', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  go.disabled = false;
+  if (data && data.success) {
+    el.textContent = data.message || 'Imported.';
+    showToast(data.message || 'Contacts imported', 'success');
+    loadToday();
+  } else {
+    el.textContent = failMsg(data, 'Could not import that list.');
+    showToast(el.textContent, 'error');
+  }
+}
+
 async function testInstantly() {
   const key = document.getElementById('instantly-key').value.trim();
   const el = document.getElementById('instantly-test-result');

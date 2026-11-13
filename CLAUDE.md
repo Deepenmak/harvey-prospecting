@@ -333,6 +333,7 @@ Users will come back with questions and tasks. Common ones:
 - **"I want to change what Sellbird says"** → Skills are in `skills/`, prompts are in `prompts/`. Both are plain markdown files. Edit them directly.
 - **"Train Sellbird on a different product"** → `sellbird train <new-url>`
 - **"How do I see the database?"** → It's at `data/sellbird.db`. They can open it with any SQLite tool, or ask you to query it.
+- **"I have contacts this copy of Sellbird doesn't"** (a cloud run, another machine, a list someone else built) → `sellbird import-contacts <file.json>` folds them into the contact files, the fetch ledger (`--runs runs.json`) and the database, so the dashboard, the Writer and the Sender all see them. On a deployment with no terminal, the same thing is a file picker on the dashboard's **Settings** tab, under *Import contacts*. It is idempotent: re-importing updates research and never touches a contact's status or history.
 - **"I just want the prospect list"** → `sellbird export` writes a sequencer-ready CSV (verified/risky emails only; `--all` for everything). Also available as Export buttons on the dashboard's Contacts tab. Sellbird is valuable purely as a list-builder even if the user never lets it send.
 
 ---
@@ -375,6 +376,7 @@ sellbird export                # Deliverable prospects → sequencer-ready CSV (
 sellbird precleared-key [--email ADDRESS]  # Free Precleared key for the cold-email check, saved to .env
 sellbird export --all          # Full raw list, no filters
 sellbird companies             # Company register CSV: every company, its fit score, and why it wasn't contacted
+sellbird import-contacts FILE  # Fold a contact list fetched elsewhere (JSON) into the contact files and the database
 sellbird gmail auth            # One-time Gmail OAuth (when provider: gmail)
 sellbird gmail test            # Verify the Gmail connection
 sellbird outbox                # Review queued emails; --approve <id> / --approve-all / --reject <id>

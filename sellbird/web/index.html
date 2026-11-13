@@ -470,6 +470,24 @@
         <button class="btn btn-primary btn-sm" onclick="saveCloudflare()">Save Cloudflare</button>
       </div>
     </div>
+    <div class="settings-row">
+      <div>
+        <h3>Import contacts</h3>
+        <p class="desc">A contact list fetched somewhere else, as JSON: every contact, with the research, fit and angle already on it. It lands in the Contacts tab and in the contact files. Nothing is spent and nothing is sent.</p>
+      </div>
+      <div class="fields">
+        <div class="form-group">
+          <label class="form-label" for="import-contacts-file">Contacts file (.json)</label>
+          <input type="file" class="form-input" id="import-contacts-file" accept=".json,application/json">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="import-runs-file">Ledger file (runs.json, optional)</label>
+          <input type="file" class="form-input" id="import-runs-file" accept=".json,application/json">
+        </div>
+        <button class="btn btn-primary btn-sm" id="import-contacts-go" onclick="importContacts()">Import</button>
+        <p class="desc" id="import-contacts-result"></p>
+      </div>
+    </div>
   </div>
 </div>
 

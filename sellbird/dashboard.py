@@ -703,6 +703,35 @@ async def save_company_knowledge(request: Request):
     return {"success": True, "message": "Saved. Agents read it on their next run."}
 
 
+@app.post("/api/contacts/import")
+async def import_contacts_route(request: Request):
+    """Import a contact list produced elsewhere (a cloud run, the leads
+    dashboard, another machine).
+
+    This is how a deployment gets a prospect list it did not fetch itself:
+    the JSON is handed over here, not committed. It writes the contact files
+    and the database under SELLBIRD_HOME, which is a mounted volume, so it
+    survives a redeploy. It spends nothing and sends nothing.
+    """
+    from sellbird.import_contacts import ImportError_, import_contacts
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "message": "That wasn't valid JSON."},
+                            status_code=400)
+    try:
+        report = await import_contacts(_state(), body)
+    except ImportError_ as e:
+        return JSONResponse({"success": False, "message": f"Not imported: {e}."},
+                            status_code=400)
+    except Exception as e:
+        logger.warning("Importing contacts failed: %s", e)
+        return JSONResponse({"success": False, "message": "Could not import that list."},
+                            status_code=500)
+    return {"success": True, "message": f"Imported {report.summary()}.",
+            "report": report.as_dict()}
+
+
 @app.post("/api/offer/propose")
 async def propose_offer(request: Request):
     """Your agent's proposed offer, waiting for you to use or dismiss it on

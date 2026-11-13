@@ -416,6 +416,64 @@ def cmd_usage(args):
     asyncio.run(_usage())
 
 
+def cmd_import_contacts(args):
+    """Fold a contact list produced elsewhere into this workspace."""
+    import json
+
+    from sellbird.import_contacts import (ImportError_, import_contacts,
+                                          parse_payload)
+    from sellbird.state import StateManager
+
+    try:
+        raw = (sys.stdin.read() if args.file == "-"
+               else Path(args.file).read_text(encoding="utf-8"))
+    except OSError as e:
+        print(f"\n  Could not read {args.file}: {e}\n")
+        sys.exit(1)
+    payload = raw
+    if args.runs:
+        try:
+            payload = {"contacts": json.loads(raw),
+                       "runs": json.loads(Path(args.runs).read_text(encoding="utf-8"))}
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"\n  Could not read {args.runs}: {e}\n")
+            sys.exit(1)
+
+    async def _import():
+        state = StateManager()
+        if args.dry_run:
+            rows, runs = parse_payload(payload)
+            from sellbird.fetch import read_contacts
+            known = {r.get("apollo_id") for r in read_contacts()}
+            new = sum(1 for r in rows if r["apollo_id"] not in known)
+            emails = sum(1 for r in rows if r["email"])
+            print(f"\n  Would import {len(rows)} contacts ({new} new to this "
+                  f"workspace, {emails} with an email) and {len(runs)} ledger runs.")
+            print("  Nothing was written.\n")
+            return
+        report = await import_contacts(state, payload)
+        if args.as_json:
+            print(json.dumps(report.as_dict(), indent=2))
+            return
+        print(f"\n  Imported {report.contacts} contacts ({report.new_contacts} new).")
+        print(f"    Companies added:    {report.companies_added}")
+        print(f"    Prospects added:    {report.prospects_added}")
+        print(f"    Prospects updated:  {report.prospects_updated}")
+        if report.no_email:
+            print(f"    No email address:   {report.no_email} (kept in the contact files only)")
+        if report.ledger_written:
+            print(f"    Ledger:             {report.runs} runs, {report.credits} credits used")
+        for problem in report.problems[:5]:
+            print(f"    Not stored: {problem}")
+        print("\n  They're in the dashboard's Contacts tab now.\n")
+
+    try:
+        asyncio.run(_import())
+    except ImportError_ as e:
+        print(f"\n  Not imported: {e}.\n")
+        sys.exit(1)
+
+
 def cmd_companies(args):
     """Write the company register to a CSV and summarise it."""
     from collections import Counter
@@ -1275,6 +1333,19 @@ def main():
                           "(default: exports/contacts_all.csv, which also "
                           "refreshes contacts_with_email.csv)")
     sub.set_defaults(func=cmd_fetch)
+
+    # sellbird import-contacts
+    sub = subparsers.add_parser(
+        "import-contacts",
+        help="Import a contact list (JSON) into the contact files and the database")
+    sub.add_argument("file", help="JSON file of contacts, or - to read stdin")
+    sub.add_argument("--runs", default="",
+                     help="runs.json from the same export, to rebuild the fetch ledger")
+    sub.add_argument("--dry-run", action="store_true",
+                     help="Say what would be imported; write nothing")
+    sub.add_argument("--json", dest="as_json", action="store_true",
+                     help="Print the report as JSON")
+    sub.set_defaults(func=cmd_import_contacts)
 
     # sellbird companies
     sub = subparsers.add_parser(
