@@ -2,6 +2,10 @@
 # credentials, Git history, environments, or browser artifacts to the builder.
 **
 !Dockerfile
+!start.sh
+!pyproject.toml
+!README.md
+!LICENSE
 !requirements.txt
 !sellbird.yaml
 !sellbird/
