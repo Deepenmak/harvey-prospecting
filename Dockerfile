@@ -2,18 +2,38 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps for Playwright chromium
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git npm \
-    && rm -rf /var/lib/apt/lists/*
+# Keep this layer as small as possible. The deployment server's Debian mirror
+# is slow and flaky (a build there fetched at 52 kB/s and the connection died
+# mid-download), so every megabyte is another chance for the build to fail.
+#
+# npm is deliberately NOT installed from apt. That package pulls in 405
+# packages and 69 MB -- eslint, webpack, babel, terser, libnode-dev and a
+# whole second Python interpreter -- and it was what killed the build. It was
+# always redundant too, because Node ships npm itself. Node is fetched here as
+# one official tarball instead of through an apt repository, which also avoids
+# needing gnupg and a second apt-get update.
+ENV NODE_VERSION=20.18.1
+RUN set -eux; \
+    echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends curl ca-certificates git; \
+    rm -rf /var/lib/apt/lists/*; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) node_arch=x64 ;; \
+      arm64) node_arch=arm64 ;; \
+      *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused \
+      "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+      -o /tmp/node.tar.xz; \
+    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1; \
+    rm /tmp/node.tar.xz; \
+    node --version; \
+    npm --version
 
-# Install Node.js for Claude Code CLI
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code CLI, which the heartbeat shells out to for every brain call.
+RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code \
+    && npm cache clean --force
 
 COPY . .
 
