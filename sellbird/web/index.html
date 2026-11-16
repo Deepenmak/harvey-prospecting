@@ -327,6 +327,41 @@
   <div class="subhead">Sending</div>
   <div id="sending-mode-card"></div>
 
+  <div class="subhead">Working hours <span class="hint">When Sellbird works, and when its email may land</span></div>
+  <div class="card" id="hours-card">
+    <div class="settings-row">
+      <div>
+        <h3>Quiet hours <span id="hours-status" class="email-tag"></span></h3>
+        <p class="desc">Sellbird rests between these times. They are read in the time zone below, so if that zone is yours and your prospects are elsewhere, it will be resting through their working day. Turn on the send window to decouple the two.</p>
+      </div>
+      <div class="fields">
+        <div class="form-row">
+          <div class="form-group"><label class="form-label" for="quiet-start">Rest from</label>
+            <input class="form-input" id="quiet-start" type="time" value="22:00"></div>
+          <div class="form-group"><label class="form-label" for="quiet-end">until</label>
+            <input class="form-input" id="quiet-end" type="time" value="07:00"></div>
+          <div class="form-group" style="flex:2"><label class="form-label" for="quiet-tz">Time zone</label>
+            <input class="form-input" id="quiet-tz" placeholder="America/New_York" autocomplete="off">
+            <p class="desc" id="quiet-tz-note"></p></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="window-on">
+            <input type="checkbox" id="window-on" onchange="toggleWindowFields()"> Send cold email in each recipient's own working hours</label>
+          <p class="desc">With this on, a cold email waits for the recipient's morning wherever they are, and your own quiet hours stop only Sellbird's other work. Gmail, Microsoft 365 and SMTP only.</p>
+        </div>
+        <div class="form-row" id="window-fields">
+          <div class="form-group"><label class="form-label" for="window-start">Deliver from</label>
+            <input class="form-input" id="window-start" type="time" value="08:00"></div>
+          <div class="form-group"><label class="form-label" for="window-end">until</label>
+            <input class="form-input" id="window-end" type="time" value="17:00"></div>
+          <div class="form-group"><label class="form-label" for="window-weekdays">
+            <input type="checkbox" id="window-weekdays" checked> Weekdays only</label></div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="saveHours()">Save working hours</button>
+      </div>
+    </div>
+  </div>
+
   <div class="subhead">Contact source <span class="hint">Where every contact and every credit comes from</span></div>
   <div class="card">
     <div class="settings-row">

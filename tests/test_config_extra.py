@@ -120,9 +120,19 @@ def test_quiet_hours_rejects_bad_time():
         QuietHoursConfig(start="25:99")
 
 
-def test_quiet_hours_rejects_bad_timezone():
-    with pytest.raises(ValidationError):
-        QuietHoursConfig(timezone="Mars/Olympus_Mons")
+def test_quiet_hours_survives_a_bad_timezone():
+    """A time this isn't: refusing the whole config over one field stopped
+    the heartbeat starting, and a hosted install had no terminal to fix it
+    from. The zone falls back and the problem is reported instead."""
+    quiet = QuietHoursConfig(timezone="Mars/Olympus_Mons")
+    assert quiet.timezone == "Mars/Olympus_Mons"   # what the user wrote, kept
+    assert quiet.zone == "UTC"                     # what Sellbird will use
+    assert "Mars/Olympus_Mons" in quiet.problem
+
+
+def test_quiet_hours_understands_a_plainly_written_timezone():
+    quiet = QuietHoursConfig(timezone="India")
+    assert (quiet.zone, quiet.problem) == ("Asia/Kolkata", "")
 
 
 def test_usage_rejects_out_of_range_percent():

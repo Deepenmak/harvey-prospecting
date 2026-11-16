@@ -431,7 +431,7 @@ function loadCurrentTab() {
     case 'activity': loadActivity(); break;
     case 'inboxes': loadInboxes(); break;
     case 'usage': loadUsage(); break;
-    case 'settings': loadSettings(); loadSendingModeCard(); break;
+    case 'settings': loadSettings(); loadSendingModeCard(); loadHours(); break;
     case 'company': loadCompany(); break;
     case 'controls': loadSellbirdStatus(); loadLogs(); break;
   }
@@ -1299,6 +1299,61 @@ function saveInstantly() {
   const key = document.getElementById('instantly-key').value.trim();
   if (!key) { showToast('Enter a new key first. The saved one is kept.', 'error'); return; }
   saveEnv({INSTANTLY_API_KEY: key}, 'Instantly API key saved.');
+}
+
+// ── Working hours: the setting that could stop the agent starting ──
+
+async function loadHours() {
+  const data = await api('/api/settings/hours');
+  if (!data || data.error) return;
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value; };
+  set('quiet-start', data.quiet_start || '22:00');
+  set('quiet-end', data.quiet_end || '07:00');
+  set('quiet-tz', data.timezone || '');
+  set('window-start', data.window_start || '08:00');
+  set('window-end', data.window_end || '17:00');
+  const on = document.getElementById('window-on');
+  if (on) on.checked = !!data.send_window;
+  const weekdays = document.getElementById('window-weekdays');
+  if (weekdays) weekdays.checked = data.window_weekdays_only !== false;
+  toggleWindowFields();
+
+  const note = document.getElementById('quiet-tz-note');
+  const chip = document.getElementById('hours-status');
+  if (data.problem) {
+    if (note) note.textContent = data.problem;
+    if (chip) { chip.className = 'email-tag invalid'; chip.textContent = 'using ' + data.resolved_timezone; }
+  } else {
+    if (note) note.textContent = data.resolved_timezone && data.resolved_timezone !== data.timezone
+      ? 'Read as ' + data.resolved_timezone + '.' : '';
+    if (chip) { chip.className = 'email-tag verified'; chip.textContent = data.resolved_timezone || ''; }
+  }
+}
+
+function toggleWindowFields() {
+  const on = document.getElementById('window-on');
+  const fields = document.getElementById('window-fields');
+  if (fields) fields.style.display = on && on.checked ? '' : 'none';
+}
+
+async function saveHours() {
+  const val = id => (document.getElementById(id) || {}).value || '';
+  const on = id => !!(document.getElementById(id) || {}).checked;
+  const data = await api('/api/settings/hours', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      quiet_start: val('quiet-start'), quiet_end: val('quiet-end'),
+      timezone: val('quiet-tz'),
+      send_window: on('window-on'), window_start: val('window-start'),
+      window_end: val('window-end'), window_weekdays_only: on('window-weekdays'),
+      window_recipient_timezone: true,
+    })
+  });
+  showToast(data && data.success ? (data.message || 'Saved.')
+    : failMsg(data, 'Could not save those hours.'),
+    data && data.success ? 'success' : 'error');
+  loadHours();
+  loadToday();
 }
 
 function saveApollo() {

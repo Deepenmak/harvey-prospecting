@@ -487,6 +487,104 @@ async def save_env_settings(request: Request):
     return {"success": True}
 
 
+@app.get("/api/settings/hours")
+async def get_working_hours():
+    """When Sellbird works, and when its email may land.
+
+    These live in the config file rather than .env, and a bad value here
+    used to stop the heartbeat starting at all — on a hosted install, with
+    no terminal to fix it from. So they are editable here.
+    """
+    from sellbird.config import load_config, resolve_timezone, send_window_of
+    try:
+        config = load_config(str(_resolve_config_file()))
+    except Exception as e:
+        return JSONResponse({"error": f"Couldn't read your config: {e}"}, status_code=500)
+    quiet = config.usage.quiet_hours
+    window = send_window_of(config)
+    zone, problem = resolve_timezone(quiet.timezone)
+    return {
+        "quiet_start": quiet.start, "quiet_end": quiet.end,
+        "timezone": quiet.timezone, "resolved_timezone": zone, "problem": problem,
+        "send_window": bool(window),
+        "window_start": getattr(window, "start", "08:00"),
+        "window_end": getattr(window, "end", "17:00"),
+        "window_weekdays_only": bool(getattr(window, "weekdays_only", True)),
+        "window_recipient_timezone": bool(getattr(window, "recipient_timezone", True)),
+        "provider": _current_provider(),
+    }
+
+
+@app.post("/api/settings/hours")
+async def save_working_hours(request: Request):
+    """Save working hours. The time zone is stored resolved, so what the
+    file holds is always a name Sellbird can act on."""
+    import yaml as _yaml
+    from datetime import time as _time
+
+    from sellbird.config import resolve_timezone
+    from sellbird.textio import read_user_text
+
+    body = await request.json() if request.headers.get(
+        "content-type", "").startswith("application/json") else {}
+    if not isinstance(body, dict):
+        return JSONResponse({"success": False, "message": "Invalid request body."},
+                            status_code=400)
+
+    def clock(value, fallback):
+        text = str(value or "").strip() or fallback
+        try:
+            _time.fromisoformat(text)
+        except ValueError:
+            raise ValueError(f"'{text}' is not a time. Use 24h HH:MM, like 22:00.")
+        return text
+
+    try:
+        quiet_start = clock(body.get("quiet_start"), "22:00")
+        quiet_end = clock(body.get("quiet_end"), "07:00")
+        window_start = clock(body.get("window_start"), "08:00")
+        window_end = clock(body.get("window_end"), "17:00")
+    except ValueError as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=400)
+
+    written = str(body.get("timezone") or "").strip()
+    zone, problem = resolve_timezone(written)
+    if written and problem:
+        return JSONResponse(
+            {"success": False,
+             "message": f"'{written}' isn't a time zone Sellbird knows. Use an IANA "
+                        "name like America/New_York, or a plain one like India."},
+            status_code=400)
+
+    target = _offer_config_file()
+    try:
+        data = _yaml.safe_load(read_user_text(target)) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"{target.name} isn't a mapping Sellbird can edit")
+        quiet = data.setdefault("usage", {}).setdefault("quiet_hours", {})
+        quiet.update({"start": quiet_start, "end": quiet_end, "timezone": zone})
+        email = data.setdefault("channels", {}).setdefault("email", {})
+        if body.get("send_window"):
+            email["send_window"] = {
+                "start": window_start, "end": window_end,
+                "weekdays_only": bool(body.get("window_weekdays_only", True)),
+                "recipient_timezone": bool(body.get("window_recipient_timezone", True)),
+            }
+        else:
+            email.pop("send_window", None)
+        target.with_name(target.name + ".bak").write_text(
+            read_user_text(target), encoding="utf-8")
+        target.write_text(_yaml.safe_dump(data, default_flow_style=False,
+                                          sort_keys=False, allow_unicode=True),
+                          encoding="utf-8")
+    except Exception as e:
+        logger.warning("Could not save working hours: %s", e)
+        return JSONResponse({"success": False, "message": f"Couldn't save: {e}"},
+                            status_code=500)
+    return {"success": True, "timezone": zone,
+            "message": f"Saved. Sellbird works on {zone} time from the next cycle."}
+
+
 @app.post("/api/trulyinbox/connect")
 async def trulyinbox_connect(request: Request):
     """Check a TrulyInbox key against the sending mailbox, then save it to .env."""
@@ -2536,6 +2634,32 @@ async def get_today():
                 "detail": str(paused) + ". Nothing will go out until you resume it.",
                 "action": "Review and resume", "tab": "outbox",
             })
+
+        # The clock Sellbird works to. A zone it cannot read, or one a working
+        # day away from the prospects', is invisible until nothing gets replies.
+        try:
+            from sellbird.config import load_config, timezone_mismatch
+            clock_config = load_config(str(_resolve_config_file()))
+        except Exception:
+            clock_config = None
+        if clock_config is not None:
+            quiet = clock_config.usage.quiet_hours
+            if quiet.problem:
+                items.append({
+                    "key": "timezone", "tone": "bad",
+                    "title": "Sellbird doesn't know what time it is for you",
+                    "detail": quiet.problem,
+                    "action": "Set your hours", "tab": "settings",
+                })
+            else:
+                mismatch = timezone_mismatch(clock_config)
+                if mismatch:
+                    items.append({
+                        "key": "timezone-gap", "tone": "warn",
+                        "title": "Sellbird rests through your prospects' working day",
+                        "detail": mismatch,
+                        "action": "Set your hours", "tab": "settings",
+                    })
 
         # A list someone imported is sitting in the staging area. It has cost
         # nothing so far, and it will go on costing nothing until it's looked at.

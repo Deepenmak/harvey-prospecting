@@ -300,6 +300,15 @@ These go in `sellbird.yaml` under `usage:`. Use sensible defaults unless they wa
 - `quiet_hours`: 22:00-07:00 in their timezone
 - `max_daily_sends`: 50 (email send limit)
 
+**Quiet hours are read on the operator's clock and rest the whole loop**, so an
+operator whose prospects are a continent away rests through the hours that
+matter. Either set `quiet_hours.timezone` to the prospects' zone, or turn on
+`channels.email.send_window` (dashboard → Settings → Working hours) so cold
+email follows each recipient's own morning instead. Today says so when the two
+are more than four hours apart. A timezone Sellbird can't read no longer stops
+it starting: a plain name like `India` is understood, anything else falls back
+to UTC and is reported on Today and in Settings.
+
 ### Step 7: Cold-Email Check (Optional)
 
 Offer this once, briefly, and take no for an answer. With `compliance.precleared.enabled: true`, Sellbird asks [Precleared](https://precleared.dev) which cold-email rules apply to each new address before the first email goes out. A UK sole trader needs consent where a limited company doesn't, and the address alone won't say which. Anything that isn't `ok_to_email` waits in the Outbox with the reason. It checks mail sent through Gmail, Microsoft 365 or SMTP, not Instantly. Precleared receives each new recipient's address, the sender country, the address source, the product description and the recipient's country when Sellbird is sure of it from the company's location (a country or state named there), else the prospects' country if there is one (`prospect_country`, or the one country every `icp.geography` entry is in), plus the company's name and the person's name when Sellbird has them, to find a UK company on the register. `docs/precleared.md` explains the check in full.

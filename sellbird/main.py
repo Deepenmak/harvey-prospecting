@@ -70,7 +70,7 @@ REPLY_READERS = ("handle_replies", "read_replies")
 def in_quiet_hours(config: SellbirdConfig) -> bool:
     """Check if we're currently in quiet hours."""
     qh = config.usage.quiet_hours
-    tz = pytz.timezone(qh.timezone)
+    tz = pytz.timezone(qh.zone)
     now = datetime.now(tz).time()
     start = time.fromisoformat(qh.start)
     end = time.fromisoformat(qh.end)
@@ -105,7 +105,7 @@ def sends_through_quiet_hours(config: SellbirdConfig) -> bool:
 def seconds_until_quiet_hours_end(config: SellbirdConfig) -> int:
     """Calculate seconds until quiet hours end."""
     qh = config.usage.quiet_hours
-    tz = pytz.timezone(qh.timezone)
+    tz = pytz.timezone(qh.zone)
     now = datetime.now(tz)
     end = time.fromisoformat(qh.end)
     end_today = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)

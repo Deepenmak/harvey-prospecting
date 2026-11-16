@@ -208,9 +208,14 @@ def send_window_of(config) -> "SendWindowConfig | None":
 
 
 def operator_timezone(config) -> str:
-    """usage.quiet_hours.timezone: the zone Sellbird itself runs on."""
+    """usage.quiet_hours.timezone: the zone Sellbird itself runs on.
+
+    Resolved, never raw: a zone Sellbird cannot parse falls back to UTC
+    rather than raising hours later, in the middle of a send.
+    """
     quiet = getattr(getattr(config, "usage", None), "quiet_hours", None)
-    return getattr(quiet, "timezone", "") or "UTC"
+    written = getattr(quiet, "timezone", "") or ""
+    return resolve_timezone(written)[0] if written else "UTC"
 
 
 class SignatureConfig(BaseModel):
@@ -648,6 +653,132 @@ def compliance_notice(config) -> str:
     )
 
 
+# Names people actually type for a time zone, and the IANA zone each means.
+# Only unambiguous ones: a country with a single zone, or an abbreviation
+# with one common reading. Anything genuinely ambiguous stays unresolved and
+# is reported rather than guessed.
+TIMEZONE_ALIASES = {
+    "india": "Asia/Kolkata", "ist": "Asia/Kolkata", "calcutta": "Asia/Kolkata",
+    "kolkata": "Asia/Kolkata", "mumbai": "Asia/Kolkata", "delhi": "Asia/Kolkata",
+    "bangalore": "Asia/Kolkata", "pune": "Asia/Kolkata",
+    "uk": "Europe/London", "gb": "Europe/London", "england": "Europe/London",
+    "london": "Europe/London", "bst": "Europe/London", "gmt": "Etc/GMT",
+    "ireland": "Europe/Dublin", "dublin": "Europe/Dublin",
+    "est": "America/New_York", "edt": "America/New_York",
+    "eastern": "America/New_York", "new york": "America/New_York",
+    "nyc": "America/New_York", "toronto": "America/Toronto",
+    "cst": "America/Chicago", "central": "America/Chicago",
+    "chicago": "America/Chicago",
+    "mst": "America/Denver", "denver": "America/Denver",
+    "pst": "America/Los_Angeles", "pdt": "America/Los_Angeles",
+    "pacific": "America/Los_Angeles", "la": "America/Los_Angeles",
+    "los angeles": "America/Los_Angeles", "san francisco": "America/Los_Angeles",
+    "utc": "UTC", "z": "UTC",
+    "singapore": "Asia/Singapore", "dubai": "Asia/Dubai", "uae": "Asia/Dubai",
+    "japan": "Asia/Tokyo", "tokyo": "Asia/Tokyo",
+    "sydney": "Australia/Sydney", "melbourne": "Australia/Melbourne",
+    "germany": "Europe/Berlin", "berlin": "Europe/Berlin",
+    "france": "Europe/Paris", "paris": "Europe/Paris",
+    "netherlands": "Europe/Amsterdam", "amsterdam": "Europe/Amsterdam",
+    "spain": "Europe/Madrid", "madrid": "Europe/Madrid",
+    "italy": "Europe/Rome", "rome": "Europe/Rome",
+}
+# What an unresolvable zone falls back to, so a typo cannot stop the agent.
+FALLBACK_TIMEZONE = "UTC"
+
+
+def resolve_timezone(value: str) -> tuple[str, str]:
+    """(IANA zone, problem). ``problem`` is empty when the value was usable.
+
+    A time zone nobody can parse used to fail the whole configuration, which
+    meant one mistyped word stopped Sellbird from starting at all — and on a
+    hosted install the only way to fix it was a terminal. Now an obvious
+    spelling is accepted, anything else falls back to UTC, and the problem is
+    reported loudly (the log, the Today page, Settings) instead of silently
+    or fatally.
+    """
+    import pytz
+
+    raw = (value or "").strip()
+    if raw in pytz.all_timezones_set:
+        return raw, ""
+    alias = TIMEZONE_ALIASES.get(raw.lower().replace("_", " "))
+    if alias:
+        return alias, ""
+    # A near miss on case or separator ("america/new_york", "Asia/kolkata").
+    folded = raw.lower().replace(" ", "_")
+    for zone in pytz.all_timezones:
+        if zone.lower() == folded:
+            return zone, ""
+    if not raw:
+        return FALLBACK_TIMEZONE, ""
+    return FALLBACK_TIMEZONE, (
+        f"'{raw}' is not a time zone Sellbird knows, so it is using "
+        f"{FALLBACK_TIMEZONE}. Set an IANA name like 'America/New_York' "
+        "(dashboard: Settings, Working hours).")
+
+
+# A representative zone per country Sellbird is likely to sell into. Only
+# used to notice that an operator's clock and their prospects' clocks are a
+# working day apart; never to decide when a particular email goes.
+COUNTRY_ZONES = {
+    "united states": "America/New_York", "usa": "America/New_York",
+    "us": "America/New_York", "canada": "America/Toronto",
+    "united kingdom": "Europe/London", "uk": "Europe/London",
+    "ireland": "Europe/Dublin", "india": "Asia/Kolkata",
+    "australia": "Australia/Sydney", "germany": "Europe/Berlin",
+    "france": "Europe/Paris", "netherlands": "Europe/Amsterdam",
+    "spain": "Europe/Madrid", "italy": "Europe/Rome",
+    "singapore": "Asia/Singapore", "united arab emirates": "Asia/Dubai",
+}
+# Hours apart before the two clocks are worth a warning. Four is roughly the
+# point at which one side's working day stops overlapping the other's.
+MISMATCH_HOURS = 4
+
+
+def timezone_mismatch(config) -> str:
+    """Why these quiet hours will sleep through the prospects' day, or ''.
+
+    Quiet hours are read in the operator's zone and gate the whole loop. An
+    operator in Asia with buyers in America therefore rests through every
+    hour that matters, and nothing says so: the agent looks healthy and
+    sends nothing anyone reads. Unless a send window is set, in which case
+    cold email follows the recipient instead and there is nothing to warn
+    about.
+    """
+    from datetime import datetime
+
+    import pytz
+
+    if send_window_of(config) is not None:
+        return ""
+    here = operator_timezone(config)
+    places = [str(p).strip().lower() for p in
+              getattr(getattr(config, "icp", None), "geography", []) or []]
+    zones = {COUNTRY_ZONES[p] for p in places if p in COUNTRY_ZONES}
+    if not zones or here in zones:
+        return ""
+    now = datetime.now(pytz.UTC)
+    try:
+        mine = now.astimezone(pytz.timezone(here)).utcoffset()
+    except Exception:
+        return ""
+    gaps = []
+    for zone in zones:
+        try:
+            theirs = now.astimezone(pytz.timezone(zone)).utcoffset()
+        except Exception:
+            continue
+        gaps.append(abs((mine - theirs).total_seconds()) / 3600)
+    if not gaps or max(gaps) < MISMATCH_HOURS:
+        return ""
+    return (f"Sellbird's clock is set to {here}, but your prospects are in "
+            f"{', '.join(sorted(places))}. Quiet hours are read on your clock, "
+            f"so it rests through {round(max(gaps))} hours of their working day. "
+            "Either set the time zone to your prospects', or turn on the send "
+            "window so cold email follows each recipient instead.")
+
+
 class QuietHoursConfig(BaseModel):
     start: str = "22:00"
     end: str = "07:00"
@@ -666,14 +797,20 @@ class QuietHoursConfig(BaseModel):
 
     @field_validator("timezone")
     @classmethod
-    def _valid_timezone(cls, v: str) -> str:
-        import pytz
+    def _known_timezone(cls, v: str) -> str:
+        """Keep what was written. Resolving it is ``zone``'s job, so the
+        Settings page can show the user their own value and the real one."""
+        return (v or "").strip() or "America/New_York"
 
-        if v not in pytz.all_timezones_set:
-            raise ValueError(
-                f"'{v}' is not a valid timezone. Use an IANA name like 'America/New_York'."
-            )
-        return v
+    @property
+    def zone(self) -> str:
+        """The IANA zone to actually use."""
+        return resolve_timezone(self.timezone)[0]
+
+    @property
+    def problem(self) -> str:
+        """Why the written zone could not be used, or ''."""
+        return resolve_timezone(self.timezone)[1]
 
 
 class UsageConfig(BaseModel):
