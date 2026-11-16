@@ -26,6 +26,10 @@ Defaults when an argument is missing: segment `mix`, credits = ask the user.
 | `exports/plan.csv` | The current candidate plan, replaced by each `--plan`. |
 | `exports/work/*.json` | This run's agent answers, cleared at the start of each run. |
 
+`S/lead_rows.py` prints a subagent's payload (`--new` or `--ids`, `--for
+research|writer|call`) as one minified JSON line, so no phase needs to read a
+contact file into the conversation.
+
 The lasting record is the **Optywise Leads** dashboard
 (https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4): its `contacts.json` and
 `runs.json` hold every contact and the ledger. `scripts/dashboard_sync.py`
@@ -52,6 +56,13 @@ call_notes, deal_check and proposal_draft. Never create another export file.
 - No real person's or company's name in anything committed. `exports/` and
   `data/` are gitignored.
 - Any draft or angle: no asterisks, no arrows, no em dashes.
+- Keep the conversation small. Never cat, read or print a whole contact file
+  (`exports/contacts_all.csv`, `exports/contacts_with_email.csv`,
+  `exports/dashboard/*.json`) or a whole plan: they hold every contact ever
+  fetched, so reading one costs the entire list and that cost grows every run.
+  Pass file paths to the scripts and read their one-line summaries. When an
+  agent needs rows, get them from `S/lead_rows.py`, which prints only the rows
+  and fields that agent is given.
 
 ## Setup
 
@@ -121,14 +132,17 @@ This is where buying intent comes from: Apollo's free plan blocks hiring
 filters, and mid-size carriers, banks and RCM firms rarely publish a job
 board Sellbird can read.
 
-- Take the `new_ids` rows from `exports/contacts_all.csv`. Scale to the batch:
+- Get this run's rows with `PY S/lead_rows.py --ids <new_ids> --for research`
+  (or `--new`, which reads the ids from the ledger's latest run). It prints one
+  minified JSON line with only the research fields. Scale to the batch:
   up to 6 leads, research yourself or with one `lead-researcher` (if yourself,
   read `.claude/agents/lead-researcher.md` first and apply its rubric exactly).
   Above that, one researcher per segment (at most 5 agents, about 5-8 leads
   each), spawned in one message.
-- Give each researcher its leads as JSON: apollo_id, company, domain, title,
-  segment, industry, employees, city, country, fit, fit_reason. Leave out
-  emails and LinkedIn URLs; the research is about the company, not the person.
+- Give each researcher its slice of that JSON as printed. The preset is
+  already the right fields (apollo_id, company, domain, title, segment,
+  industry, employees, city, country, fit, fit_reason): no emails and no
+  LinkedIn URLs, because the research is about the company, not the person.
 - Save the merged answers to `exports/work/research.json`.
 
 ## Phase 6: verify (free, uses Claude quota)
@@ -149,8 +163,9 @@ state and marks tier A accounts. Then upload `contacts.json` and
 
 ## Phase 8: drafts (only with --drafts)
 
-Spawn one `lead-writer` with the top new leads (at most 10): first name,
-title, company, segment, and their research entry. Save its answer to
+Spawn one `lead-writer` with the top new leads (at most 10):
+`PY S/lead_rows.py --ids <ids> --for writer --limit 10` for the leads, plus
+their research entries from `exports/work/research.json`. Save its answer to
 `exports/work/drafts.json` and run `PY S/apply_review.py --drafts exports/work/drafts.json`.
 The drafts land in the draft_subject and draft_body columns. Nothing goes to
 the Outbox.

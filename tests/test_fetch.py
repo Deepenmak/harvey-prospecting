@@ -208,6 +208,61 @@ def test_apply_review_caps_intent_and_folds_briefs_and_deals(tmp_path, monkeypat
     assert got["3"]["deal_check"] == "known: budget | missing: approval path"
 
 
+def test_restore_finds_the_dashboard_assets_under_any_name(tmp_path):
+    """A cloud run saves the two assets under their blob ids, so a restore
+    sorts them out by shape: no copy, no rename, nothing read into context."""
+    mod = _load_script(".claude/skills/lead-gen/scripts/dashboard_sync.py",
+                       "dashboard_sync")
+    (tmp_path / "e14e5ebe1504c07b827973fc628661d4.json").write_text(json.dumps(
+        [{"apollo_id": "1", "company": "Example Insurance", "email": "a@example.com"}]),
+        encoding="utf-8")
+    (tmp_path / "c8fa11f6f55008ec57a05117ff15ca9e.json").write_text(json.dumps(
+        [{"ran_at": "2026-01-01 07:00", "segment": "mix", "credits_used": 10,
+          "seen_ids": ["1"]}]), encoding="utf-8")
+    contacts, runs = mod._classify(tmp_path)
+    assert [c["apollo_id"] for c in contacts] == ["1"]
+    assert runs[0]["credits_used"] == 10
+
+
+def test_restore_prefers_the_named_files_and_says_what_is_missing(tmp_path):
+    mod = _load_script(".claude/skills/lead-gen/scripts/dashboard_sync.py",
+                       "dashboard_sync")
+    (tmp_path / "contacts.json").write_text(json.dumps(
+        [{"apollo_id": "2", "company": "Example Bank"}]), encoding="utf-8")
+    (tmp_path / "runs.json").write_text(json.dumps([]), encoding="utf-8")
+    contacts, runs = mod._classify(tmp_path)
+    assert [c["apollo_id"] for c in contacts] == ["2"] and runs == []
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    try:
+        mod._classify(empty)
+    except SystemExit as e:
+        assert "contacts" in str(e) and "runs" in str(e)
+    else:
+        raise AssertionError("a restore with no files must stop")
+
+
+def test_lead_rows_sends_only_this_run_and_only_the_agent_fields(tmp_path, monkeypatch):
+    """Phase 5 must never read the whole contact file into the conversation."""
+    mod = _load_script(".claude/skills/lead-gen/scripts/lead_rows.py", "lead_rows")
+    rows = [contact("1", "a@example.com", fit="a"), contact("2", "b@example.com", fit="b")]
+    for r, co in zip(rows, ("Example Insurance", "Example Bank")):
+        r["company"], r["domain"] = co, "example.com"
+    monkeypatch.setattr(mod, "read_contacts", lambda: rows)
+    out, missing = mod.rows_for(["1", "9"], mod.PRESETS["research"])
+    assert len(out) == 1 and missing == ["9"]
+    assert set(out[0]) == set(mod.PRESETS["research"])
+    # The person's contact details never go to a researcher.
+    assert "email" not in out[0] and "linkedin_url" not in out[0]
+
+    ledger = tmp_path / "fetch_ledger.json"
+    ledger.write_text(json.dumps({"runs": [{"seen_ids": ["0"]}, {"seen_ids": ["1", "2"]}]}),
+                      encoding="utf-8")
+    monkeypatch.setattr(mod, "LOCAL_LEDGER", ledger)
+    assert mod.new_ids() == ["1", "2"]
+
+
 def test_weekly_stats_count_per_segment():
     mod = _load_script(".claude/skills/weekly-review/scripts/weekly_stats.py", "weekly_stats")
     stats = mod.segment_stats([

@@ -46,10 +46,12 @@ The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
 
 1. Restore. With ArtifactData `get` read `datasets/contacts` and
    `datasets/runs` on the dashboard; each has `source.url` `/_blob/<id>`.
-   Read each file with the Artifact tool (`action: read`, `path: <id>`),
-   copy them to exports/dashboard/contacts.json and
-   exports/dashboard/runs.json, then run
-   `python .claude/skills/lead-gen/scripts/dashboard_sync.py restore exports/dashboard`.
+   Fetch both files with the Artifact tool (`action: read`, `path: <id>`),
+   which saves each one to disk and reports where it put it. Don't open,
+   print, copy or rename them: contacts.json holds every lead ever fetched,
+   and the restore tells the two files apart by shape. Pass the folder they
+   landed in:
+   `python .claude/skills/lead-gen/scripts/dashboard_sync.py restore <that folder>`.
    If any of this fails, stop and report it: never fetch without the ledger.
 2. Run the lead-gen skill (.claude/skills/lead-gen/SKILL.md) as if invoked
    with `<per_run_credits from segments.yaml> mix --yes`, phases 0 to 7.
@@ -68,6 +70,12 @@ The dashboard is https://claude.ai/artifact/1etfjcKyomZpVHJwVwJCR4.
    Gmail tool is available, send the same summary with the dashboard link
    to the account's own address (or save it as a draft if sending isn't
    offered).
+
+Keep the conversation small; it is the one cost that grows with every run.
+The contacts file holds every lead ever fetched, so never print, read or
+re-type contacts.json, exports/contacts_all.csv or a plan file. Hand paths to
+the skill's scripts and read their one-line summaries, and get any rows an
+agent needs from `.claude/skills/lead-gen/scripts/lead_rows.py`.
 
 Never send email to prospects, approve the Outbox or turn on autopilot.
 Never edit segments.yaml or the credit cap. Never commit or push.
