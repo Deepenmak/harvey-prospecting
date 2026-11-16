@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from sellbird.config import (FALLBACK_TIMEZONE, load_config, operator_timezone,
-                             resolve_timezone, timezone_mismatch)
+                             read_clock, resolve_timezone, timezone_mismatch)
 
 
 def config_with(tmp_path, quiet=None, geography=None, send_window=None):
@@ -70,6 +70,52 @@ def test_the_clock_still_runs_with_a_broken_zone(tmp_path):
     config = config_with(tmp_path, quiet={"timezone": "Nowhere/Nothing"})
     assert isinstance(in_quiet_hours(config), bool)
     assert seconds_until_quiet_hours_end(config) >= 0
+
+
+# ── Reading the hours themselves ─────────────────────────────────────
+
+
+@pytest.mark.parametrize("written,expected", [
+    ("22:00", "22:00"),
+    ("07:00Z", "07:00"),            # an offset here is noise: the zone is separate
+    ("22:00+05:30", "22:00"),
+    ("07:00:00", "07:00"),
+    (1320, "22:00"),                # YAML 1.1 reads an unquoted 22:00 as base 60
+    (420, "07:00"),
+])
+def test_every_shape_a_time_arrives_in_is_read(written, expected):
+    assert read_clock(written, "22:00")[0] == expected
+
+
+def test_a_time_nobody_can_read_falls_back_and_is_reported():
+    text, problem = read_clock("9am", "22:00")
+    assert text == "22:00"
+    assert "9am" in problem
+
+
+@pytest.mark.parametrize("quiet", [
+    {"start": "22:00", "end": "07:00Z"},        # the one that took the agent down
+    {"start": "22:00+05:30", "end": "07:00"},
+    {"start": 1320, "end": 420},
+    {"start": "9am", "end": "07:00"},
+])
+def test_a_broken_clock_never_stops_a_cycle(tmp_path, quiet):
+    """An offset on one side and not the other made comparing them raise
+    TypeError, which failed the heartbeat every 60 seconds forever."""
+    from sellbird.main import in_quiet_hours, seconds_until_quiet_hours_end
+
+    config = config_with(tmp_path, quiet=quiet)
+    assert isinstance(in_quiet_hours(config), bool)
+    assert seconds_until_quiet_hours_end(config) >= 0
+    assert config.usage.quiet_hours.start == "22:00"
+    assert config.usage.quiet_hours.end == "07:00"
+
+
+def test_a_send_window_time_cannot_be_aware_either():
+    from sellbird.config import SendWindowConfig
+
+    window = SendWindowConfig(start="08:00+05:30", end="17:00Z")
+    assert (window.start, window.end) == ("08:00", "17:00")
 
 
 # ── Noticing a clock on the wrong continent ──────────────────────────

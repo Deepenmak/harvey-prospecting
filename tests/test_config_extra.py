@@ -115,9 +115,20 @@ def test_quiet_hours_defaults():
     assert q.end == "07:00"
 
 
-def test_quiet_hours_rejects_bad_time():
-    with pytest.raises(ValidationError):
-        QuietHoursConfig(start="25:99")
+def test_quiet_hours_survives_a_bad_time():
+    """Same reasoning as the time zone: this section is on the heartbeat's
+    critical path, so a bad value falls back and is reported rather than
+    stopping the agent."""
+    quiet = QuietHoursConfig(start="25:99")
+    assert quiet.start == "22:00"
+    assert "25:99" in quiet.problem
+
+
+def test_quiet_hours_drops_an_offset_so_the_two_ends_stay_comparable():
+    """An offset on one end and not the other made comparing them raise."""
+    quiet = QuietHoursConfig(start="22:00+05:30", end="07:00")
+    assert (quiet.start, quiet.end) == ("22:00", "07:00")
+    assert quiet.problem == ""
 
 
 def test_quiet_hours_survives_a_bad_timezone():

@@ -520,9 +520,8 @@ async def save_working_hours(request: Request):
     """Save working hours. The time zone is stored resolved, so what the
     file holds is always a name Sellbird can act on."""
     import yaml as _yaml
-    from datetime import time as _time
 
-    from sellbird.config import resolve_timezone
+    from sellbird.config import read_clock, resolve_timezone
     from sellbird.textio import read_user_text
 
     body = await request.json() if request.headers.get(
@@ -532,11 +531,13 @@ async def save_working_hours(request: Request):
                             status_code=400)
 
     def clock(value, fallback):
-        text = str(value or "").strip() or fallback
-        try:
-            _time.fromisoformat(text)
-        except ValueError:
-            raise ValueError(f"'{text}' is not a time. Use 24h HH:MM, like 22:00.")
+        """What goes in the file is always a plain HH:MM, whatever was typed.
+        Refusing here is safe: nothing is saved, and the agent keeps running
+        on what it already had."""
+        text, problem = read_clock(value, fallback)
+        if problem:
+            raise ValueError(f"'{str(value).strip()}' is not a time. "
+                             "Use 24h HH:MM, like 22:00.")
         return text
 
     try:

@@ -183,12 +183,15 @@ class SendWindowConfig(BaseModel):
             v = f"{v // 60:02d}:{v % 60:02d}"
         v = str(v).strip()
         try:
-            _time.fromisoformat(v)
+            parsed = _time.fromisoformat(v)
         except ValueError:
             raise ValueError(
                 f"send_window time '{v}' is not valid. Use 24h HH:MM, e.g. '08:00'."
             )
-        return v
+        # An offset here ("08:00+05:30") would make this time aware, and
+        # comparing it with a naive one raises. The zone is decided per
+        # recipient, so the offset is noise.
+        return f"{parsed.hour:02d}:{parsed.minute:02d}"
 
     @model_validator(mode="after")
     def _start_before_end(self):
@@ -687,6 +690,39 @@ TIMEZONE_ALIASES = {
 FALLBACK_TIMEZONE = "UTC"
 
 
+def read_clock(value, fallback: str = "") -> tuple[str, str]:
+    """A wall-clock time as "HH:MM", and what was wrong with it.
+
+    Three things arrive here that are not that:
+
+    - YAML 1.1 reads an unquoted ``22:00`` as the number 1320 (base 60),
+      so half a quiet-hours block can come through as an integer and the
+      other half as a string.
+    - A time carrying an offset ("07:00Z", "22:00+05:30") parses to an
+      *aware* time, and comparing one of those with a naive one raises
+      TypeError — which took a cycle down every 60 seconds. The zone is
+      configured separately, so an offset here is noise: it is dropped.
+    - Anything else. It falls back rather than raising, because one
+      mistyped field must never stop the agent starting.
+    """
+    from datetime import time as _clock
+
+    if isinstance(value, _clock):
+        return f"{value.hour:02d}:{value.minute:02d}", ""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 24 * 60:
+        return f"{value // 60:02d}:{value % 60:02d}", ""
+    text = str(value or "").strip()
+    if not text:
+        return fallback, ""
+    try:
+        parsed = _clock.fromisoformat(text)
+    except ValueError:
+        return fallback, (f"'{text}' is not a time Sellbird can read, so it is "
+                          f"using {fallback}. Use 24h HH:MM, like 22:00 "
+                          "(dashboard: Settings, Working hours).")
+    return f"{parsed.hour:02d}:{parsed.minute:02d}", ""
+
+
 def resolve_timezone(value: str) -> tuple[str, str]:
     """(IANA zone, problem). ``problem`` is empty when the value was usable.
 
@@ -780,20 +816,37 @@ def timezone_mismatch(config) -> str:
 
 
 class QuietHoursConfig(BaseModel):
+    """When Sellbird rests. Nothing in here can stop it starting.
+
+    This section is always present and sits on the heartbeat's critical
+    path, so every field is read forgivingly and anything wrong is reported
+    (``problem``) rather than raised. The alternative is what happened
+    before: one mistyped word, and an agent that would not boot and could
+    only be fixed from a terminal.
+    """
+
     start: str = "22:00"
     end: str = "07:00"
     timezone: str = "America/New_York"
+    # Filled while reading, shown on Today and in Settings.
+    clock_problems: list[str] = []
 
-    @field_validator("start", "end")
+    @model_validator(mode="before")
     @classmethod
-    def _valid_time(cls, v: str) -> str:
-        try:
-            _time.fromisoformat(v)
-        except ValueError:
-            raise ValueError(
-                f"'{v}' is not a valid time. Use 24h HH:MM format, e.g. '22:00'."
-            )
-        return v
+    def _read_clocks(cls, data):
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        problems = []
+        for field, fallback in (("start", "22:00"), ("end", "07:00")):
+            if field not in data:
+                continue
+            text, problem = read_clock(data[field], fallback)
+            data[field] = text
+            if problem:
+                problems.append(f"Quiet hours {field}: {problem}")
+        data["clock_problems"] = problems
+        return data
 
     @field_validator("timezone")
     @classmethod
@@ -809,8 +862,12 @@ class QuietHoursConfig(BaseModel):
 
     @property
     def problem(self) -> str:
-        """Why the written zone could not be used, or ''."""
-        return resolve_timezone(self.timezone)[1]
+        """Everything wrong with this section, in one line, or ''."""
+        found = list(self.clock_problems)
+        zone_problem = resolve_timezone(self.timezone)[1]
+        if zone_problem:
+            found.append(zone_problem)
+        return " ".join(found)
 
 
 class UsageConfig(BaseModel):
