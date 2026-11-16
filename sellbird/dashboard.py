@@ -386,6 +386,7 @@ async def get_settings():
     """Get current settings — presence flags only for secrets, never raw values."""
     env_vars = _read_env_file()
     all_keys = [
+        "APOLLO_HARVEY_KEY",
         "INSTANTLY_API_KEY", "LINKEDIN_EMAIL", "LINKEDIN_PASSWORD",
         "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN",
         "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET",
@@ -406,6 +407,9 @@ async def get_settings():
 
     return {
         "provider": _current_provider(),
+        # Apollo is this workspace's contact source: every staged list is
+        # enriched through it, and every credit is spent there.
+        "apollo_api_key_set": is_set("APOLLO_HARVEY_KEY"),
         # Non-secret values echo back so fields repopulate; secrets are
         # presence-only so keys never leave the box.
         "instantly_api_key_set": is_set("INSTANTLY_API_KEY"),
@@ -446,7 +450,8 @@ async def save_env_settings(request: Request):
         return JSONResponse({"success": False, "message": "Invalid request body."}, status_code=400)
     async with _env_lock:
         updates = {}
-        for key in ["INSTANTLY_API_KEY", "LINKEDIN_EMAIL", "LINKEDIN_PASSWORD",
+        for key in ["APOLLO_HARVEY_KEY",
+                     "INSTANTLY_API_KEY", "LINKEDIN_EMAIL", "LINKEDIN_PASSWORD",
                      "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN",
                      "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET",
                      "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
@@ -2532,6 +2537,22 @@ async def get_today():
                 "action": "Review and resume", "tab": "outbox",
             })
 
+        # A list someone imported is sitting in the staging area. It has cost
+        # nothing so far, and it will go on costing nothing until it's looked at.
+        staged = await query_db(
+            "SELECT b.id, b.name, COUNT(r.id) AS n FROM import_batches b "
+            "LEFT JOIN import_rows r ON r.batch_id = b.id AND r.status = 'staged' "
+            "WHERE b.status = 'review' GROUP BY b.id HAVING n > 0 "
+            "ORDER BY b.created_at DESC LIMIT 3")
+        for batch in staged:
+            items.append({
+                "key": "import-" + str(batch["id"])[:8], "tone": "warn",
+                "title": f"{batch['n']} contacts are staged, waiting on you",
+                "detail": (f"{batch['name'] or 'A list'} is parsed and priced. "
+                           "Nothing has been enriched and no credit has been spent."),
+                "action": "Review the list", "tab": "imports",
+            })
+
         # Cold email waiting on the optional Precleared check: its free
         # checks ran out, the key was rejected, or it couldn't be reached.
         from sellbird.integrations.precleared import current_hold, hold_message
@@ -3064,8 +3085,10 @@ async def get_instance():
 
 
 from sellbird.inbox_routes import router as _inbox_router  # noqa: E402
+from sellbird.import_routes import router as _import_router  # noqa: E402
 
 app.include_router(_inbox_router)
+app.include_router(_import_router)
 
 
 # ── Extensions (sellbird.extensions): their routes, after every built-in one,

@@ -474,6 +474,131 @@ def cmd_import_contacts(args):
         sys.exit(1)
 
 
+def cmd_imports(args):
+    """Stage a list, price the ways of enriching it, run one, promote it."""
+    from sellbird import apollo_ops, import_service
+    from sellbird.import_staging import StagingError
+    from sellbird.import_store import ImportStore
+
+    async def _run():
+        store = ImportStore()
+        await store.init_db()
+
+        if args.stage:
+            try:
+                text = Path(args.stage).read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"\n  Could not read {args.stage}: {e}\n")
+                return 1
+            result = await import_service.stage_file(
+                store, Path(args.stage).name, text)
+            analysis = result["analysis"]
+            print(f"\n  Staged {result['staged']} rows from {args.stage}. "
+                  "Nothing has been spent.")
+            print(f"  {analysis['summary']}")
+            for warning in analysis.get("warnings", []):
+                print(f"    Note: {warning}")
+            _print_menu(result["batch_id"], analysis.get("recommended") or [],
+                        await _targets(store, result["batch_id"]))
+            print(f"\n  Next:  sellbird imports {result['batch_id']} "
+                  "--enrich <operation> --max-credits <n>\n")
+            return 0
+
+        if not args.batch:
+            batches = await store.list_batches()
+            if not batches:
+                print("\n  Nothing staged. Add a list with: "
+                      "sellbird imports --stage <file.csv>\n")
+                return 0
+            print()
+            for b in batches:
+                counts = b["counts"]
+                print(f"  {b['id'][:8]}  {b['name'][:28]:<28} {b['status']:<10} "
+                      f"{counts.get('total', 0):>4} rows  "
+                      f"{counts.get('enriched', 0):>4} enriched  "
+                      f"{counts.get('imported', 0):>4} imported  "
+                      f"{b['credits_spent']:>3} credits")
+            print()
+            return 0
+
+        batch = await _find(store, args.batch)
+        if batch is None:
+            print(f"\n  No staged list starting with {args.batch!r}.\n")
+            return 1
+        batch_id = batch["id"]
+
+        if args.enrich:
+            op = apollo_ops.OPS.get(args.enrich)
+            if op is None:
+                print(f"\n  {args.enrich!r} is not an Apollo operation. "
+                      f"Try: {', '.join(apollo_ops.MENU_ORDER)}\n")
+                return 1
+            quote = await import_service.estimate(store, batch_id, args.enrich)
+            if not quote["rows"]:
+                print(f"\n  No row qualifies for that: it needs {quote['needs']}.\n")
+                return 1
+            cap = args.max_credits
+            if op.credits_per_unit and not cap:
+                print(f"\n  That would cost up to {quote['credits']} credits. "
+                      "Re-run with --max-credits to approve a ceiling.\n")
+                return 1
+            try:
+                report = await import_service.enrich(store, batch_id, args.enrich,
+                                                     max_credits=cap)
+            except StagingError as e:
+                print(f"\n  Not run: {e}.\n")
+                return 1
+            print(f"\n  {report['summary']}\n")
+            return 0
+
+        if args.promote:
+            result = await import_service.promote(store, batch_id)
+            print(f"\n  {result['message']}\n")
+            return 0
+
+        if args.discard:
+            await store.update_batch(batch_id, status="discarded")
+            print("\n  Discarded.\n")
+            return 0
+
+        analysis = batch.get("analysis") or {}
+        counts = batch["counts"]
+        print(f"\n  {batch['name']}  ({batch['status']}, "
+              f"{batch['credits_spent']} credits spent)")
+        print(f"  {analysis.get('summary', '')}")
+        print("  " + "  ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+        for warning in analysis.get("warnings", []):
+            print(f"    Note: {warning}")
+        _print_menu(batch_id, analysis.get("recommended") or [],
+                    await _targets(store, batch_id))
+        print()
+        return 0
+
+    async def _find(store, prefix: str):
+        for b in await store.list_batches(limit=200):
+            if b["id"].startswith(prefix):
+                return await store.get_batch(b["id"])
+        return None
+
+    async def _targets(store, batch_id):
+        return [r for r in await store.get_rows(batch_id)
+                if r["status"] in ("staged", "enriched")]
+
+    def _print_menu(batch_id, recommended, rows):
+        best = (recommended[0]["op"] if recommended else "")
+        print("\n  How to enrich it:")
+        for op in apollo_ops.menu(rows):
+            price = "free" if op["free"] else (
+                f"{op['credits_per_unit']}/{op['unit']}")
+            mark = " <- recommended" if op["key"] == best else ""
+            print(f"    {op['key']:<26} {price:<10} {op['eligible']:>4} rows  "
+                  f"up to {op['estimated_credits']:>4} credits{mark}")
+
+    code = asyncio.run(_run())
+    if code:
+        sys.exit(code)
+
+
 def cmd_companies(args):
     """Write the company register to a CSV and summarise it."""
     from collections import Counter
@@ -1346,6 +1471,23 @@ def main():
     sub.add_argument("--json", dest="as_json", action="store_true",
                      help="Print the report as JSON")
     sub.set_defaults(func=cmd_import_contacts)
+
+    # sellbird imports — the staging area: price before you spend
+    sub = subparsers.add_parser(
+        "imports",
+        help="Stage a contact list, price the ways of enriching it, run one")
+    sub.add_argument("batch", nargs="?", default="",
+                     help="A staged list's id (the first few characters will do)")
+    sub.add_argument("--stage", metavar="FILE", default="",
+                     help="Stage a .csv or .json file; spends nothing")
+    sub.add_argument("--enrich", metavar="OPERATION", default="",
+                     help="Run one Apollo operation over the staged rows")
+    sub.add_argument("--max-credits", type=int, default=0,
+                     help="The ceiling for --enrich; the run stops dead there")
+    sub.add_argument("--promote", action="store_true",
+                     help="Add the finished rows to the pipeline")
+    sub.add_argument("--discard", action="store_true", help="Set it aside")
+    sub.set_defaults(func=cmd_imports)
 
     # sellbird companies
     sub = subparsers.add_parser(

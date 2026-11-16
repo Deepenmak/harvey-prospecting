@@ -9,7 +9,10 @@ list tracked with SQLite's ``PRAGMA user_version`` so existing user DBs
 upgrade cleanly in place.
 """
 
+import asyncio
 import json
+import logging
+import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -31,6 +34,27 @@ DB_PATH = PROJECT_ROOT / "data" / "sellbird.db"
 # How long (seconds) a connection waits on a locked database before failing.
 from sellbird import storage  # noqa: E402
 from sellbird.storage import BUSY_TIMEOUT_SECONDS  # noqa: E402,F401 (re-exported)
+
+logger = logging.getLogger("sellbird.state")
+
+# One migration at a time per database file. Several dashboard routes call
+# init_db() on the same first request, and they must not all migrate at once.
+_INIT_LOCKS: dict[str, asyncio.Lock] = {}
+
+# What SQLite says when a migration has already been applied by someone else.
+_APPLIED_MESSAGES = ("duplicate column name", "already exists")
+
+
+def _init_lock(db_path: str) -> asyncio.Lock:
+    lock = _INIT_LOCKS.get(str(db_path))
+    if lock is None:
+        lock = _INIT_LOCKS[str(db_path)] = asyncio.Lock()
+    return lock
+
+
+def _already_applied(message: str) -> bool:
+    text = message.lower()
+    return any(fragment in text for fragment in _APPLIED_MESSAGES)
 
 # Email statuses the Writer drafts for. Shared with the heartbeat so it only
 # chooses write_campaign when there is something the Writer will act on.
@@ -558,6 +582,41 @@ MIGRATIONS: list[str] = [
     ALTER TABLE conversations ADD COLUMN mailbox_id TEXT DEFAULT '';
     CREATE INDEX IF NOT EXISTS idx_outbox_mailbox_sent ON outbox(mailbox_id, status, sent_at);
     """,
+    # ── v17: staged imports — a file is reviewed before it costs anything ──
+    # A contact list that arrives from outside (a CSV, an export, a scheduled
+    # free search) lands here, not in prospects. Each row is inert until a
+    # human chooses an enrichment route and approves its credits, exactly as
+    # an outbox row is inert until approved. The unique index on
+    # (batch_id, email) is the double-spend guard: a retry physically cannot
+    # enrich the same person twice. raw_json keeps the source row verbatim,
+    # so a bad column mapping is always recoverable.
+    """
+    CREATE TABLE IF NOT EXISTS import_batches (
+      id TEXT PRIMARY KEY, name TEXT DEFAULT '', source TEXT DEFAULT 'csv',
+      status TEXT DEFAULT 'analysing',
+      mapping_json TEXT DEFAULT '{}', analysis_json TEXT DEFAULT '{}',
+      credits_spent INTEGER DEFAULT 0, error TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+    CREATE TABLE IF NOT EXISTS import_rows (
+      id TEXT PRIMARY KEY, batch_id TEXT REFERENCES import_batches(id),
+      raw_json TEXT DEFAULT '{}',
+      email TEXT DEFAULT '', first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
+      company TEXT DEFAULT '', domain TEXT DEFAULT '', title TEXT DEFAULT '',
+      linkedin_url TEXT DEFAULT '',
+      status TEXT DEFAULT 'staged', route TEXT DEFAULT '', credits INTEGER DEFAULT 0,
+      apollo_id TEXT DEFAULT '', email_status TEXT DEFAULT '',
+      enriched_json TEXT DEFAULT '{}', error TEXT DEFAULT '',
+      prospect_id TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_import_rows_email
+      ON import_rows(batch_id, email) WHERE email != '';
+    CREATE INDEX IF NOT EXISTS idx_import_rows_batch_status
+      ON import_rows(batch_id, status);
+    """,
 ]
 
 BRAIN_PROVIDERS = ("claude", "codex")
@@ -609,24 +668,41 @@ class StateManager:
             yield db
 
     async def init_db(self):
-        """Create/upgrade the schema. Safe to call on every startup."""
+        """Create/upgrade the schema. Safe to call on every startup.
+
+        Every route calls this, and on a first load several of them arrive at
+        once. Two tasks migrating the same new database both read version 0
+        and both run `ALTER TABLE ... ADD COLUMN`, and the loser used to fail
+        the whole request with "duplicate column name" — a first boot that
+        answered 500 until the page was reloaded. One lock per database file
+        serialises them, and a migration another task has already applied is
+        treated as done rather than as an error.
+        """
         if storage.manages_schema(self.db_path):
             # A backend that owns its schema is only checked, never migrated here.
             await storage.check_schema(self.db_path)
             return
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        async with self._connect() as db:
-            # WAL is persistent in the DB file: readers (dashboard) never
-            # block the writer (agent) and vice versa.
-            await db.execute("PRAGMA journal_mode=WAL")
-            await db.execute("PRAGMA synchronous=NORMAL")
+        async with _init_lock(self.db_path):
+            async with self._connect() as db:
+                # WAL is persistent in the DB file: readers (dashboard) never
+                # block the writer (agent) and vice versa.
+                await db.execute("PRAGMA journal_mode=WAL")
+                await db.execute("PRAGMA synchronous=NORMAL")
 
-            async with db.execute("PRAGMA user_version") as cursor:
-                (version,) = await cursor.fetchone()
+                async with db.execute("PRAGMA user_version") as cursor:
+                    (version,) = await cursor.fetchone()
 
-            for target, script in enumerate(MIGRATIONS, start=1):
-                if version < target:
-                    await db.executescript(script)
+                for target, script in enumerate(MIGRATIONS, start=1):
+                    if version >= target:
+                        continue
+                    try:
+                        await db.executescript(script)
+                    except sqlite3.OperationalError as e:
+                        # Another process (the heartbeat, say) got there first.
+                        if not _already_applied(str(e)):
+                            raise
+                        logger.debug("migration %s was already applied: %s", target, e)
                     await db.execute(f"PRAGMA user_version = {target}")
                     await db.commit()
 

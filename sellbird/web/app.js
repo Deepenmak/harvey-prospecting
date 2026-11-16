@@ -131,6 +131,12 @@ const STATUS = {
   running:        ['Running', 'active'],
   stale:          ['Stale', 'bad'],
   stalled:        ['Stopped', 'bad'],
+  // imported lists
+  analysing:      ['Reading it', 'active'],
+  review:         ['Waiting on you', 'waiting'],
+  enriching:      ['Enriching', 'active'],
+  imported:       ['In pipeline', 'good'],
+  discarded:      ['Discarded', 'idle'],
 };
 
 function statusMeta(status) {
@@ -417,6 +423,7 @@ function loadCurrentTab() {
     case 'signals': loadSignals(); break;
     case 'discover': loadDiscoverProviders(); break;
     case 'companies': if (!companyDrill) loadCompanies(); break;
+    case 'imports': loadImports(); break;
     case 'prospects': loadProspects(); break;
     case 'campaigns': loadCampaigns(); break;
     case 'outbox': loadOutbox(); break;
@@ -1287,7 +1294,13 @@ async function loadSettings() {
   savedPh('smtp-pass', data.smtp_password_set, 'Enter password / app password');
   savedPh('imap-pass', data.imap_password_set, 'Same as SMTP password');
   document.getElementById('imap-same-pass').checked = !data.imap_password_set;
+  savedPh('apollo-key', data.apollo_api_key_set, 'Enter your Apollo API key');
   savedPh('instantly-key', data.instantly_api_key_set, 'Enter your Instantly API key');
+  const ap = document.getElementById('apollo-status');
+  if (ap) {
+    ap.className = 'email-tag ' + (data.apollo_api_key_set ? 'verified' : 'guess');
+    ap.textContent = data.apollo_api_key_set ? 'connected' : 'no key yet';
+  }
   savedPh('reoon-key', data.reoon_api_key_set, '600 free/mo — reoon.com/email-verifier');
   savedPh('zerobounce-key', data.zerobounce_api_key_set, '100 free/mo — best for M365/Workspace catch-alls');
   savedPh('hunter-key', data.hunter_api_key_set, '50 free/mo + email-pattern lookup');
@@ -1378,6 +1391,13 @@ function saveInstantly() {
   saveEnv({INSTANTLY_API_KEY: key}, 'Instantly API key saved.');
 }
 
+function saveApollo() {
+  const key = document.getElementById('apollo-key').value.trim();
+  if (!key) { showToast('Enter the Apollo API key first.', 'error'); return; }
+  saveEnv({APOLLO_HARVEY_KEY: key}, 'Apollo key saved. Staged lists can be enriched now.')
+    .then(loadSettings);
+}
+
 function saveLinkedIn() {
   const payload = {LINKEDIN_EMAIL: document.getElementById('linkedin-email').value.trim()};
   const pass = document.getElementById('linkedin-password').value;
@@ -1402,24 +1422,27 @@ function saveCloudflare() {
 function openImportContacts() {
   const d = document.getElementById('import-dialog');
   d.innerHTML =
-    '<div class="modal-head"><div><h3 id="import-dialog-title">Import contacts</h3>' +
-      '<div class="sub">JSON from a Sellbird export: every contact with its research, fit and angle. ' +
-      'Contacts already here are updated, never duplicated, and their status is left alone.</div></div>' +
+    '<div class="modal-head"><div><h3 id="import-dialog-title">Add contacts</h3>' +
+      '<div class="sub">A CSV from anywhere, a Sellbird export, or a list of addresses. ' +
+      'It is staged for review first: nothing is enriched and no credit is spent until you say so.</div></div>' +
       '<button class="btn btn-ghost btn-sm btn-icon" onclick="closeImportDialog()" aria-label="Close">' + icon('close') + '</button></div>' +
     '<div class="modal-body">' +
-      '<div class="form-group"><label class="form-label" for="import-contacts-file">Contacts file (.json)</label>' +
-        '<input type="file" class="form-input" id="import-contacts-file" accept=".json,application/json">' +
+      '<div class="form-group"><label class="form-label" for="import-contacts-file">File (.csv or .json)</label>' +
+        '<input type="file" class="form-input" id="import-contacts-file" accept=".csv,.tsv,.json,text/csv,application/json">' +
         '<p class="desc">A file wins over anything pasted below.</p></div>' +
-      '<div class="form-group"><label class="form-label" for="import-runs-file">Ledger file (runs.json, optional)</label>' +
-        '<input type="file" class="form-input" id="import-runs-file" accept=".json,application/json">' +
-        '<p class="desc">Carries the credits already spent and the people a fetch has seen, so the next run does not pay for them twice.</p></div>' +
-      '<div class="form-group"><label class="form-label" for="import-contacts-paste">Or paste the JSON</label>' +
+      '<div class="form-group"><label class="form-label" for="import-contacts-paste">Or paste it</label>' +
         '<textarea class="form-input" id="import-contacts-paste" rows="6" spellcheck="false" ' +
-        'placeholder="Paste the contacts JSON here: a list of contacts, or the whole export object."></textarea></div>' +
+        'placeholder="Paste a CSV, a contacts JSON, or one email address per line."></textarea></div>' +
+      '<details class="form-group"><summary class="form-label">A Sellbird export, with its ledger</summary>' +
+        '<p class="desc">Import it straight into the pipeline instead of staging it. The ledger file ' +
+        'carries the credits already spent and the people a fetch has seen, so the next run does not pay for them twice.</p>' +
+        '<input type="file" class="form-input" id="import-runs-file" accept=".json,application/json" ' +
+        'aria-label="Ledger file (runs.json)"></details>' +
       '<p class="desc" id="import-contacts-result" role="status"></p>' +
     '</div>' +
     '<div class="modal-foot"><button class="btn btn-ghost" onclick="closeImportDialog()">Cancel</button>' +
-      '<button class="btn btn-primary" id="import-contacts-go" onclick="importContacts()">Import</button></div>';
+      '<button class="btn btn-secondary" id="import-contacts-direct" onclick="importContacts(true)">Import directly</button>' +
+      '<button class="btn btn-primary" id="import-contacts-go" onclick="importContacts(false)">Stage for review</button></div>';
   if (!d.open) d.showModal();
 }
 
@@ -1428,19 +1451,50 @@ function closeImportDialog() {
   if (d.open) d.close();
 }
 
-async function importContacts() {
+async function importContacts(direct) {
   const el = document.getElementById('import-contacts-result');
-  const go = document.getElementById('import-contacts-go');
+  const go = document.getElementById(direct ? 'import-contacts-direct' : 'import-contacts-go');
   const file = (document.getElementById('import-contacts-file').files || [])[0];
-  const runsFile = (document.getElementById('import-runs-file').files || [])[0];
+  const runsEl = document.getElementById('import-runs-file');
+  const runsFile = ((runsEl && runsEl.files) || [])[0];
   const pasted = document.getElementById('import-contacts-paste').value.trim();
-  if (!file && !pasted) { el.textContent = 'Choose a .json file, or paste the JSON.'; return; }
+  if (!file && !pasted) { el.textContent = 'Choose a file, or paste the list.'; return; }
   go.disabled = true;
   el.textContent = file ? 'Reading ' + file.name + '…' : 'Reading…';
+  let text;
+  try {
+    text = file ? await file.text() : pasted;
+  } catch (e) {
+    go.disabled = false;
+    el.textContent = 'That file could not be read.';
+    return;
+  }
+
+  if (direct) return importDirectly(text, runsFile, el, go);
+
+  el.textContent = 'Staging…';
+  const data = await api('/api/imports', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: file ? file.name : 'pasted', text: text})
+  });
+  go.disabled = false;
+  if (data && data.success) {
+    showToast(data.message || 'Staged', 'success');
+    closeImportDialog();
+    _importBatch = data.batch_id;
+    showTab('imports', document.querySelector('nav button[onclick*="imports"]'));
+  } else {
+    el.textContent = failMsg(data, 'Could not stage that file.');
+    showToast(el.textContent, 'error');
+  }
+}
+
+// The older path, kept for a Sellbird export that is already finished: it
+// goes straight into the pipeline, ledger and all, with nothing to decide.
+async function importDirectly(text, runsFile, el, go) {
   let payload;
   try {
-    payload = {contacts: JSON.parse(file ? await file.text() : pasted)};
-    // A whole export object ({contacts, runs}) pastes in as readily as a list.
+    payload = {contacts: JSON.parse(text)};
     if (payload.contacts && Array.isArray(payload.contacts.contacts)) {
       if (Array.isArray(payload.contacts.runs)) payload.runs = payload.contacts.runs;
       payload.contacts = payload.contacts.contacts;
@@ -1448,7 +1502,7 @@ async function importContacts() {
     if (runsFile) payload.runs = JSON.parse(await runsFile.text());
   } catch (e) {
     go.disabled = false;
-    el.textContent = 'That is not valid JSON.';
+    el.textContent = 'Importing directly needs a Sellbird JSON export. Stage a CSV instead.';
     return;
   }
   el.textContent = 'Importing…';
@@ -1458,7 +1512,6 @@ async function importContacts() {
   });
   go.disabled = false;
   if (data && data.success) {
-    el.textContent = data.message || 'Imported.';
     showToast(data.message || 'Contacts imported', 'success');
     closeImportDialog();
     loadProspects();
@@ -1467,6 +1520,283 @@ async function importContacts() {
     el.textContent = failMsg(data, 'Could not import that list.');
     showToast(el.textContent, 'error');
   }
+}
+
+// ── Imports: a staged list, priced before it costs anything ──
+//
+// Every list that arrives from outside stops here first. The page shows what
+// is in it, what Sellbird read it as, and what each Apollo operation would
+// cost on these exact rows. Nothing is called until a cap is approved.
+
+let _importBatch = null;     // the open batch, or null for the list
+let _importRun = null;       // poll timer while an enrichment runs
+const IMPORT_FIELDS = ['', 'email', 'first_name', 'last_name', 'title',
+                       'company', 'domain', 'linkedin_url', 'full_name'];
+const ROW_STATE = {
+  staged: ['Staged', 't-idle'], enriched: ['Enriched', 't-good'],
+  imported: ['In pipeline', 't-good'], duplicate: ['Already yours', 't-waiting'],
+  failed: ['Failed', 't-bad'], skipped: ['Skipped', 't-idle'],
+};
+
+function importActions(html) {
+  document.getElementById('imports-actions').innerHTML = html;
+}
+
+async function loadImports() {
+  if (_importBatch) return loadImportBatch(_importBatch);
+  const el = document.getElementById('imports-body');
+  const data = await api('/api/imports');
+  if (!data) { el.innerHTML = offlineState(); return; }
+  importActions('<button class="btn btn-primary" onclick="openImportContacts()">' +
+    icon('plus') + 'Add contacts</button>');
+  const batches = data.batches || [];
+  const count = document.getElementById('nav-imports');
+  const waiting = batches.filter(b => b.status === 'review').length;
+  if (count) count.textContent = waiting ? String(waiting) : '';
+  if (!batches.length) {
+    el.innerHTML = emptyState(icon('imports'), 'Nothing staged',
+      'Drop in a CSV, a Sellbird export, or a list of addresses and Sellbird will read it, ' +
+      'tell you what is usable, and price the ways of enriching it before anything is spent.');
+    return;
+  }
+  let html = '<div class="inbox-summary"><span><b>' + batches.length + '</b> ' +
+    (batches.length === 1 ? 'list' : 'lists') + '</span><span><b>' +
+    Number(data.credits_today || 0) + '</b> Apollo credits spent today</span>' +
+    (Number(data.daily_cap) > 0 ? '<span>Daily cap <b>' + Number(data.daily_cap) + '</b></span>' : '') +
+    '</div><div class="table-card"><table><thead><tr><th>List</th><th>Rows</th>' +
+    '<th>Enriched</th><th>In pipeline</th><th>Credits</th><th>Status</th><th>Added</th></tr></thead><tbody>';
+  for (const b of batches) {
+    const c = b.counts || {};
+    html += '<tr style="cursor:pointer" onclick="openImport(\'' + b.id + '\')">' +
+      '<td><div class="cell-stack"><span class="cell-main">' + escHtml(b.name || 'pasted') + '</span>' +
+        '<span class="cell-sub">' + escHtml(b.source || '') + '</span></div></td>' +
+      '<td>' + Number(c.total || 0) + '</td>' +
+      '<td>' + Number(c.enriched || 0) + '</td>' +
+      '<td>' + Number(c.imported || 0) + '</td>' +
+      '<td>' + Number(b.credits_spent || 0) + '</td>' +
+      '<td>' + badge(b.status) + '</td>' +
+      '<td class="muted">' + relTime(b.created_at) + '</td></tr>';
+  }
+  el.innerHTML = html + '</tbody></table></div>';
+}
+
+function openImport(id) { _importBatch = id; loadImports(); }
+
+function closeImport() {
+  _importBatch = null;
+  if (_importRun) { clearInterval(_importRun); _importRun = null; }
+  loadImports();
+}
+
+async function loadImportBatch(id) {
+  const el = document.getElementById('imports-body');
+  const data = await api('/api/imports/' + encodeURIComponent(id));
+  if (!data) { el.innerHTML = offlineState(); return; }
+  if (data.success === false) { closeImport(); return; }
+  const b = data.batch || {};
+  const a = b.analysis || {};
+  const c = b.counts || {};
+  importActions('<button class="btn btn-ghost" onclick="closeImport()">All lists</button>' +
+    '<button class="btn btn-secondary" onclick="promoteImport()">Add ready rows to pipeline</button>');
+
+  let html = '<div class="card"><div class="card-title">' + escHtml(b.name || 'pasted') +
+    ' ' + badge(b.status) + '</div>' +
+    '<p>' + escHtml(a.summary || 'Staged and waiting.') + '</p>' +
+    '<div class="modal-stats">' +
+      '<div class="inset"><div class="k">Rows</div><div class="v">' + Number(c.total || 0) + '</div></div>' +
+      '<div class="inset"><div class="k">With an address</div><div class="v">' + Number((a.quality || {}).with_email || 0) + '</div></div>' +
+      '<div class="inset"><div class="k">Already yours</div><div class="v">' + Number(c.duplicate || 0) + '</div></div>' +
+      '<div class="inset"><div class="k">Credits spent</div><div class="v">' + Number(b.credits_spent || 0) + '</div></div>' +
+    '</div>' +
+    (a.pending ? '<p class="desc">Claude is reading the file now. What you see is Sellbird\'s own reading of it.</p>'
+      : a.by === 'claude' ? '<p class="desc">Read by Claude.</p>'
+      : '<p class="desc">Read by Sellbird itself.</p>') +
+    (a.warnings || []).map(w => '<div class="notice wait">' + escHtml(w) + '</div>').join('') +
+    '</div>';
+
+  const run = data.run || {};
+  if (run.state === 'running' && run.batch_id === id) {
+    html += '<div class="notice wait"><b>Enriching.</b> ' + escHtml(run.op || '') + ' is running.</div>';
+  } else if (run.state === 'done' && run.batch_id === id && run.message) {
+    html += '<div class="notice good">' + escHtml(run.message) + '</div>';
+  } else if (run.state === 'failed' && run.batch_id === id) {
+    html += '<div class="notice bad">' + escHtml(run.message || 'That run failed.') + '</div>';
+  }
+
+  html += '<div class="card"><div class="card-title">How to enrich this list</div>' +
+    '<p class="desc">What each one would cost on these rows, before anything is called. ' +
+    'Apollo charges nothing for a person it cannot find, so a run usually comes in under its estimate.</p>' +
+    '<div class="inbox-help">';
+  for (const op of (data.ops || [])) {
+    const recommended = ((a.recommended || [])[0] || {}).op === op.key;
+    html += '<div class="inset">' +
+      '<h4>' + escHtml(op.label) + (recommended ? ' <span class="badge t-good">Recommended</span>' : '') +
+        (op.danger ? ' <span class="badge t-bad">Expensive</span>' : '') + '</h4>' +
+      '<p>' + escHtml(op.blurb) + '</p>' +
+      '<p class="desc"><b>' + (op.free ? 'Free' : op.credits_per_unit + ' credit' +
+        (op.credits_per_unit > 1 ? 's' : '') + ' per ' + escHtml(op.unit)) + '</b> &middot; ' +
+        op.eligible + ' of these rows qualify &middot; ' +
+        (op.free ? 'no credits' : 'up to <b>' + op.estimated_credits + ' credits</b>') +
+        (op.plan_note ? ' &middot; ' + escHtml(op.plan_note) : '') + '</p>' +
+      '<button class="btn ' + (op.danger ? 'btn-danger' : recommended ? 'btn-primary' : 'btn-secondary') +
+        ' btn-sm"' + (op.eligible ? '' : ' disabled') +
+        ' onclick="askEnrich(\'' + op.key + '\')">' +
+        (op.eligible ? 'Run this' : 'No rows qualify') + '</button></div>';
+  }
+  html += '</div></div>';
+
+  html += mappingCard(b);
+  html += importRowsTable(data.rows || []);
+  html += '<div class="card"><div class="btn-group">' +
+    '<button class="btn btn-ghost btn-sm" onclick="discardImport()">Discard this list</button>' +
+    '<button class="btn btn-ghost btn-sm" onclick="deleteImport()">Delete it</button></div></div>';
+  el.innerHTML = html;
+
+  if (run.state === 'running' && run.batch_id === id) {
+    if (!_importRun) _importRun = setInterval(pollImportRun, 2000);
+  } else if (_importRun) {
+    clearInterval(_importRun); _importRun = null;
+  }
+  // Claude's reading replaces Sellbird's as soon as it lands.
+  if (a.pending && _importBatch === id) setTimeout(() => {
+    if (_importBatch === id) loadImportBatch(id);
+  }, 3000);
+}
+
+function mappingCard(b) {
+  const mapping = b.mapping || {};
+  const columns = Object.keys(mapping);
+  if (!columns.length) return '';
+  let html = '<div class="card"><div class="card-title">What each column means</div>' +
+    '<p class="desc">Sellbird read the headings. Correct anything it got wrong and the rows are re-read ' +
+    'from the original file, which is kept exactly as it arrived.</p><div class="inbox-help">';
+  for (const col of columns) {
+    html += '<div class="inset"><h4>' + escHtml(col) + '</h4>' +
+      '<select class="form-input" data-col="' + escHtml(col) + '">' +
+      IMPORT_FIELDS.map(f => '<option value="' + f + '"' + (mapping[col] === f ? ' selected' : '') +
+        '>' + (f ? escHtml(f.replace(/_/g, ' ')) : 'ignore') + '</option>').join('') +
+      '</select></div>';
+  }
+  return html + '</div><div class="btn-group"><button class="btn btn-secondary btn-sm" ' +
+    'onclick="saveMapping()">Re-read with this mapping</button></div></div>';
+}
+
+function importRowsTable(rows) {
+  if (!rows.length) return '';
+  const shown = rows.slice(0, 100);
+  let html = '<div class="table-card"><table class="nowrap"><thead><tr><th>Name</th><th>Email</th>' +
+    '<th>Company</th><th>Title</th><th>State</th><th>Route</th><th>Credits</th></tr></thead><tbody>';
+  for (const r of shown) {
+    const state = ROW_STATE[r.status] || [r.status, 't-idle'];
+    html += '<tr><td>' + escHtml(((r.first_name || '') + ' ' + (r.last_name || '')).trim() || '—') + '</td>' +
+      '<td>' + escHtml(r.email || '') + (r.email_status === 'verified' ?
+        ' <span class="verified" title="Apollo verified">&#10003;</span>' : '') + '</td>' +
+      '<td>' + escHtml(r.company || r.domain || '') + '</td>' +
+      '<td>' + escHtml(r.title || '') + '</td>' +
+      '<td><span class="badge ' + state[1] + '">' + escHtml(state[0]) + '</span></td>' +
+      '<td class="muted">' + escHtml(r.route || '') + '</td>' +
+      '<td>' + Number(r.credits || 0) + '</td></tr>';
+  }
+  return html + '</tbody></table></div><div class="table-foot">' + shown.length +
+    ' of ' + rows.length + ' rows</div>';
+}
+
+async function saveMapping() {
+  const mapping = {};
+  document.querySelectorAll('#imports-body select[data-col]').forEach(s => {
+    if (s.value) mapping[s.getAttribute('data-col')] = s.value;
+  });
+  const data = await api('/api/imports/' + encodeURIComponent(_importBatch) + '/mapping', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({mapping: mapping})
+  });
+  showToast(data && data.success ? (data.message || 'Re-read.') :
+    failMsg(data, 'Could not save that mapping.'), data && data.success ? 'success' : 'error');
+  loadImports();
+}
+
+// Approving a spend: the estimate, then a cap, then the run.
+async function askEnrich(opKey) {
+  const data = await api('/api/imports/' + encodeURIComponent(_importBatch) + '/estimate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({op: opKey})
+  });
+  if (!data || data.success === false) {
+    showToast(failMsg(data, 'Could not price that.'), 'error');
+    return;
+  }
+  const d = document.getElementById('import-dialog');
+  const free = data.free;
+  d.innerHTML =
+    '<div class="modal-head"><div><h3 id="import-dialog-title">' + escHtml(data.label) + '</h3>' +
+      '<div class="sub">' + data.rows + ' rows qualify' +
+      (data.skipped ? ', ' + data.skipped + ' do not (they need ' + escHtml(data.needs) + ')' : '') +
+      '.</div></div>' +
+      '<button class="btn btn-ghost btn-sm btn-icon" onclick="closeImportDialog()" aria-label="Close">' + icon('close') + '</button></div>' +
+    '<div class="modal-body">' +
+      (free ? '<div class="notice good">This one is free. No credits are involved.</div>'
+            : '<div class="notice wait">This will cost up to <b>' + data.credits +
+              ' credits</b>. Apollo charges nothing for a person it cannot find.</div>' +
+              '<div class="form-group"><label class="form-label" for="enrich-cap">Spend at most</label>' +
+              '<input class="form-input" id="enrich-cap" type="number" min="1" step="1" value="' +
+              data.credits + '"><p class="desc">The run stops dead at this number, even mid-list.</p></div>') +
+      '<p class="desc" id="enrich-result" role="status"></p></div>' +
+    '<div class="modal-foot"><button class="btn btn-ghost" onclick="closeImportDialog()">Cancel</button>' +
+      '<button class="btn btn-primary" id="enrich-go" onclick="runEnrich(\'' + opKey + '\')">' +
+      (free ? 'Run it' : 'Spend up to ' + data.credits + ' credits') + '</button></div>';
+  if (!d.open) d.showModal();
+}
+
+async function runEnrich(opKey) {
+  const capEl = document.getElementById('enrich-cap');
+  const go = document.getElementById('enrich-go');
+  go.disabled = true;
+  const data = await api('/api/imports/' + encodeURIComponent(_importBatch) + '/enrich', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({op: opKey, max_credits: capEl ? Number(capEl.value) || 0 : 0})
+  });
+  go.disabled = false;
+  if (data && data.success) {
+    closeImportDialog();
+    showToast('Running. Credits are counted as they are spent.', 'success');
+    if (!_importRun) _importRun = setInterval(pollImportRun, 2000);
+    loadImports();
+  } else {
+    const el = document.getElementById('enrich-result');
+    if (el) el.textContent = failMsg(data, 'Could not start that run.');
+    showToast(failMsg(data, 'Could not start that run.'), 'error');
+  }
+}
+
+async function pollImportRun() {
+  const run = await api('/api/imports/run/status');
+  if (!run || run.state === 'running') return;
+  clearInterval(_importRun); _importRun = null;
+  if (run.message) showToast(run.message, run.state === 'failed' ? 'error' : 'success');
+  loadImports();
+}
+
+async function promoteImport() {
+  const data = await api('/api/imports/' + encodeURIComponent(_importBatch) + '/import', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})
+  });
+  showToast(data && data.success ? (data.message || 'Imported.') :
+    failMsg(data, 'Could not import those rows.'), data && data.success ? 'success' : 'error');
+  loadImports();
+  loadToday();
+}
+
+async function discardImport() {
+  const data = await api('/api/imports/' + encodeURIComponent(_importBatch) + '/discard',
+    {method: 'POST'});
+  if (data && data.success) { showToast(data.message || 'Discarded.', 'success'); closeImport(); }
+  else showToast(failMsg(data, 'Could not discard that list.'), 'error');
+}
+
+async function deleteImport() {
+  const data = await api('/api/imports/' + encodeURIComponent(_importBatch), {method: 'DELETE'});
+  if (data && data.success) { showToast('Deleted.', 'success'); closeImport(); }
+  else showToast(failMsg(data, 'Could not delete that list.'), 'error');
 }
 
 async function testInstantly() {

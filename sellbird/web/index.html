@@ -45,6 +45,8 @@
     <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
     <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></symbol>
+    <symbol id="i-imports" viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></symbol>
   </defs>
 </svg>
 
@@ -89,6 +91,7 @@
       <button onclick="showTab('signals', this)"><svg class="icon" aria-hidden="true"><use href="#i-signals"/></svg><span class="label">Signals</span><span class="nav-count" id="nav-signals"></span></button>
       <button onclick="showTab('discover', this)"><svg class="icon" aria-hidden="true"><use href="#i-discover"/></svg><span class="label">Discover</span></button>
       <button onclick="showTab('companies', this)"><svg class="icon" aria-hidden="true"><use href="#i-companies"/></svg><span class="label">Companies</span></button>
+      <button onclick="showTab('imports', this)"><svg class="icon" aria-hidden="true"><use href="#i-imports"/></svg><span class="label">Imports</span><span class="nav-count" id="nav-imports"></span></button>
       <button onclick="showTab('prospects', this)"><svg class="icon" aria-hidden="true"><use href="#i-contacts"/></svg><span class="label">Contacts</span></button>
       <button onclick="showTab('campaigns', this)"><svg class="icon" aria-hidden="true"><use href="#i-campaigns"/></svg><span class="label">Campaigns</span></button>
     </div>
@@ -257,11 +260,20 @@
 </div>
 
 <!-- Contacts -->
+<!-- Imports: a list that has arrived, before it costs anything -->
+<div id="imports" class="section">
+  <div class="section-head">
+    <div><h2>Imports</h2><p>Lists that have arrived from outside, waiting to be enriched. Nothing here has cost a credit yet.</p></div>
+    <div class="page-actions" id="imports-actions"></div>
+  </div>
+  <div id="imports-body"></div>
+</div>
+
 <div id="prospects" class="section">
   <div class="section-head">
     <div><h2>Contacts</h2><p>People Sellbird has found, how sure it is of their address, and where each one stands.</p></div>
     <div class="page-actions">
-      <button class="btn btn-secondary btn-sm" onclick="openImportContacts()"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Import JSON</button>
+      <button class="btn btn-secondary btn-sm" onclick="openImportContacts()"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add contacts</button>
       <button class="btn btn-secondary btn-sm" onclick="downloadCsv('/api/export/prospects.csv', 'prospects.csv', this)"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Export deliverable</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadCsv('/api/export/prospects.csv?all=true', 'prospects-all.csv', this)">Export all</button>
     </div>
@@ -333,6 +345,23 @@
 
   <div class="subhead">Sending</div>
   <div id="sending-mode-card"></div>
+
+  <div class="subhead">Contact source <span class="hint">Where every contact and every credit comes from</span></div>
+  <div class="card">
+    <div class="settings-row">
+      <div>
+        <h3>Apollo <span id="apollo-status" class="email-tag"></span></h3>
+        <p class="desc">Apollo finds the people, matches their addresses and tells you whether each one is deliverable. Searching is free; matching a person costs a credit, and nothing is spent without your approval. The key is on your Apollo account under Settings → Integrations → API.</p>
+      </div>
+      <div class="fields">
+        <div class="form-group">
+          <label class="form-label" for="apollo-key">API key</label>
+          <input type="password" class="form-input" id="apollo-key" placeholder="Enter your Apollo API key" autocomplete="off">
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="saveApollo()">Save Apollo key</button>
+      </div>
+    </div>
+  </div>
 
   <div class="subhead">Email provider <span class="hint">Active: <b id="active-provider">…</b> &middot; set <code>channels.email.provider</code> in <code>sellbird.yaml</code> to gmail, microsoft, smtp or instantly</span></div>
   <div class="card">
@@ -417,12 +446,12 @@
     </div>
   </div>
 
-  <div class="subhead">Email verification <span class="hint">Strongly recommended</span></div>
+  <div class="subhead">Email verification <span class="hint">Not needed while Apollo is your source</span></div>
   <div class="card">
     <div class="settings-row">
       <div>
         <h3>Verifiers</h3>
-        <p class="desc">Add at least one so found emails get verified. Without any, addresses stay <span class="email-tag guess" style="margin:0">guess</span> and are never sent. Reoon has the best free tier (600 a month).</p>
+        <p class="desc">Apollo already says whether each address it finds is deliverable, so these are only needed for contacts found another way (the Scout agent, or a list with no Apollo match). Without any verifier those addresses stay <span class="email-tag guess" style="margin:0">guess</span> and are never sent. Reoon has the best free tier (600 a month).</p>
       </div>
       <div class="fields">
         <div class="form-group"><label class="form-label" for="reoon-key">Reoon API key <span id="reoon-status" class="email-tag"></span></label>

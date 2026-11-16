@@ -56,7 +56,7 @@ People will ask "how does this work?" — explain it simply:
 
 - **"Can it use ChatGPT / Codex instead of Claude?"** → Yes, opt-in. Install Codex CLI 0.159.3 (`npm install -g @openai/codex@0.159.3`; other versions are refused), run `codex login` with ChatGPT, and set `brain: { provider: codex, model: gpt-5.5 }` in sellbird.yaml (or choose codex in `sellbird setup`, which suggests gpt-5.5, or `sellbird train <url> --provider codex --model gpt-5.5`). Any exact model ID from the account's catalog also works, including Luna, Sol and Terra models (e.g. `gpt-6.1-sol`): Sellbird runs them in a private text-only catalog copy with no tools. A blank model picks the highest-priority listed model; an unlisted model needs an explicit ID, and unknown model IDs or unrecognised tool modes are refused. Claude stays the default; Sellbird never switches providers on its own. Each Codex call runs isolated with no tools — see docs/codex.md. macOS and Linux only; on Windows, Codex is refused, so use Claude. Don't edit the user's own `~/.codex` config to make it work.
 
-- **"What's the dashboard?"** → Have the user run `sellbird dashboard` in their own terminal and open the private link it prints (`http://127.0.0.1:5555/#token=…`; `sellbird dashboard --url` prints it again). Don't read, print or repeat the token yourself: it unlocks the dashboard. It opens on **Today** — anything waiting on a decision, then the pipeline. Tabs for Signals, Companies, Contacts, Campaigns, Outbox, Conversations, Activity, Usage, Settings.
+- **"What's the dashboard?"** → Have the user run `sellbird dashboard` in their own terminal and open the private link it prints (`http://127.0.0.1:5555/#token=…`; `sellbird dashboard --url` prints it again). Don't read, print or repeat the token yourself: it unlocks the dashboard. It opens on **Today** — anything waiting on a decision, then the pipeline. Tabs for Signals, Discover, Companies, **Imports**, Contacts, Campaigns, Outbox, Inboxes, Conversations, Activity, Usage, Settings.
 
 - **"What are signals?"** → Signals are the facts Sellbird collects about a business: who its current agency is, whether it's running ads, whether it has online booking, how it ranks. **Sellbird proposes; you confirm.** Nothing is collected until the user says yes on the Signals tab (or `sellbird signals --confirm ...`). That keeps spend intentional and makes every prospect list explainable — a cohort is a query over signals a human chose, not a black box.
 
@@ -333,7 +333,7 @@ Users will come back with questions and tasks. Common ones:
 - **"I want to change what Sellbird says"** → Skills are in `skills/`, prompts are in `prompts/`. Both are plain markdown files. Edit them directly.
 - **"Train Sellbird on a different product"** → `sellbird train <new-url>`
 - **"How do I see the database?"** → It's at `data/sellbird.db`. They can open it with any SQLite tool, or ask you to query it.
-- **"I have contacts this copy of Sellbird doesn't"** (a cloud run, another machine, a list someone else built) → `sellbird import-contacts <file.json>` folds them into the contact files, the fetch ledger (`--runs runs.json`) and the database, so the dashboard, the Writer and the Sender all see them. On a deployment with no terminal, the same thing is a file picker on the dashboard's **Settings** tab, under *Import contacts*. It is idempotent: re-importing updates research and never touches a contact's status or history.
+- **"I have a list of contacts to bring in"** (a CSV from anywhere, a cloud run, a list someone else built) → dashboard **Contacts → Add contacts**, or `sellbird imports --stage <file.csv>`. It is **staged**, not imported: Sellbird maps the columns, Claude reads the file, and the **Imports** tab prices every way of enriching it against those exact rows before a credit moves. Choose an operation, approve a ceiling, then promote the finished rows into the pipeline. Contacts already in the pipeline are marked and left out of the spend. A finished Sellbird export can still go straight in with `sellbird import-contacts <file.json>` (`--runs runs.json` restores the fetch ledger too); it is idempotent, and never touches a contact's status or history.
 - **"I just want the prospect list"** → `sellbird export` writes a sequencer-ready CSV (verified/risky emails only; `--all` for everything). Also available as Export buttons on the dashboard's Contacts tab. Sellbird is valuable purely as a list-builder even if the user never lets it send.
 
 ---
@@ -376,7 +376,8 @@ sellbird export                # Deliverable prospects → sequencer-ready CSV (
 sellbird precleared-key [--email ADDRESS]  # Free Precleared key for the cold-email check, saved to .env
 sellbird export --all          # Full raw list, no filters
 sellbird companies             # Company register CSV: every company, its fit score, and why it wasn't contacted
-sellbird import-contacts FILE  # Fold a contact list fetched elsewhere (JSON) into the contact files and the database
+sellbird import-contacts FILE  # Fold a finished contact list (JSON) straight into the contact files and the database
+sellbird imports               # The staging area: --stage FILE, then --enrich OP --max-credits N, then --promote
 sellbird gmail auth            # One-time Gmail OAuth (when provider: gmail)
 sellbird gmail test            # Verify the Gmail connection
 sellbird outbox                # Review queued emails; --approve <id> / --approve-all / --reject <id>
