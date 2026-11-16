@@ -22,6 +22,11 @@ mkdir -p "$HOME_DIR/data" "$HOME_DIR/exports" "$HOME_DIR/skills" "$HOME_DIR/prom
 # Seed the volume from the image on first boot. Existing files are NEVER
 # overwritten, so everything configured through the UI survives a redeploy.
 [ -f "$HOME_DIR/sellbird.yaml" ] || cp "$SEED/sellbird.yaml" "$HOME_DIR/sellbird.yaml"
+# Apollo's search targets. Edited on the volume, so a redeploy never
+# overwrites the segments someone has tuned.
+if [ ! -f "$HOME_DIR/segments.yaml" ] && [ -f "$SEED/segments.yaml" ]; then
+  cp "$SEED/segments.yaml" "$HOME_DIR/segments.yaml"
+fi
 for dir in prompts skills; do
   [ -d "$SEED/$dir" ] || continue
   for file in "$SEED/$dir"/*; do

@@ -89,7 +89,7 @@
     <div class="nav-group">
       <div class="nav-label">Pipeline</div>
       <button onclick="showTab('signals', this)"><svg class="icon" aria-hidden="true"><use href="#i-signals"/></svg><span class="label">Signals</span><span class="nav-count" id="nav-signals"></span></button>
-      <button onclick="showTab('discover', this)"><svg class="icon" aria-hidden="true"><use href="#i-discover"/></svg><span class="label">Discover</span></button>
+      <button onclick="showTab('discover', this)"><svg class="icon" aria-hidden="true"><use href="#i-discover"/></svg><span class="label">Apollo</span></button>
       <button onclick="showTab('companies', this)"><svg class="icon" aria-hidden="true"><use href="#i-companies"/></svg><span class="label">Companies</span></button>
       <button onclick="showTab('imports', this)"><svg class="icon" aria-hidden="true"><use href="#i-imports"/></svg><span class="label">Imports</span><span class="nav-count" id="nav-imports"></span></button>
       <button onclick="showTab('prospects', this)"><svg class="icon" aria-hidden="true"><use href="#i-contacts"/></svg><span class="label">Contacts</span></button>
@@ -197,59 +197,40 @@
 </div>
 
 <!-- Discover: the only stage that spends money -->
+<!-- Apollo: who exists, found free, priced before it is bought -->
 <div id="discover" class="section">
   <div class="section-head">
     <div>
-      <h2>Discover</h2>
-      <p>Find businesses matching your ICP. Pick a source, see what it will cost,
-         then run it &mdash; nothing is called until you press the button.</p>
+      <h2>Apollo</h2>
+      <p>Where every contact comes from. Searching Apollo is free and shows you who exists;
+         their addresses are withheld until you buy them, one credit each. Nothing is spent here.</p>
     </div>
+    <div class="page-actions" id="apollo-actions"></div>
   </div>
-  <div id="discover-profile"></div>
+  <div id="apollo-ledger"></div>
 
-  <div class="subhead">Source</div>
-  <div id="discover-providers"></div>
+  <div class="subhead">Who to look for</div>
+  <div id="apollo-segments"></div>
 
-  <div class="subhead">Run</div>
+  <div class="subhead">Find candidates <span class="hint">Free: names, titles and companies, no addresses</span></div>
   <div class="card">
     <div class="form-row" style="margin-bottom:4px">
-      <div class="form-group">
-        <label class="form-label" for="disc-preset">Look for</label>
-        <select class="form-input" id="disc-preset" title="Startup and hiring searches, run by web search (TinyFish, Serper or DataForSEO SERP). YC startups and Accelerator startups: companies whose own site says Y Combinator or another accelerator (Techstars, Antler, Entrepreneur First and others) backed them; turn on YC_BACKED or ACCELERATOR to tag them. Recently funded: companies announcing their own raise in the last 18 months; turn on FUNDING_ROUND to record the round, amount and date. Hiring for your roles: companies whose own careers pages list one of your hiring_signals roles (or ICP titles); turn on HIRING_ROLE and profiling reads the job board their site links to.">
-          <option value="">Your ICP's industries</option>
-          <option value="yc">YC startups</option>
-          <option value="accelerator">Accelerator startups</option>
-          <option value="funding">Recently funded</option>
-          <option value="hiring">Companies hiring for your roles</option>
-        </select>
-      </div>
       <div class="form-group" style="flex:2">
-        <label class="form-label" for="disc-cities">Cities</label>
-        <input class="form-input" id="disc-cities" placeholder="From your ICP, or override: Denver, CO; Boulder, CO">
+        <label class="form-label" for="apollo-segment">Segment</label>
+        <select class="form-input" id="apollo-segment"></select>
       </div>
       <div class="form-group">
-        <label class="form-label" for="disc-limit">Results per query</label>
-        <input class="form-input" id="disc-limit" type="number" value="100" min="1" max="1000">
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="disc-depth">Search depth</label>
-        <input class="form-input" id="disc-depth" type="number" value="30" min="10" max="100" step="10">
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="disc-cap">Spend cap ($)</label>
-        <input class="form-input" id="disc-cap" type="number" value="1.00" min="0" step="0.25">
+        <label class="form-label" for="apollo-limit">How many</label>
+        <input class="form-input" id="apollo-limit" type="number" value="25" min="1" max="500">
       </div>
     </div>
-    <div id="discover-estimate"></div>
+    <p class="desc">The search costs nothing. The candidates land on the Imports tab, where
+       buying their addresses is priced and capped before anything is called.</p>
     <div class="btn-group">
-      <button class="btn btn-secondary" onclick="estimateDiscovery()">Estimate cost</button>
-      <button class="btn btn-primary" id="disc-run" onclick="runDiscovery()" disabled>
-        Estimate first</button>
-      <button class="btn btn-danger" id="disc-stop" onclick="stopDiscovery()" style="display:none">
-        Stop</button>
+      <button class="btn btn-primary" id="apollo-go" onclick="findCandidates()">Find candidates</button>
     </div>
+    <div id="apollo-result"></div>
   </div>
-  <div id="discover-result"></div>
 </div>
 
 <!-- Companies -->

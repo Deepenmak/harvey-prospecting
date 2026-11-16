@@ -151,16 +151,18 @@ class ImportStore(StateManager):
                 values = {f: _clean(row.get(f)) for f in ROW_FIELDS}
                 values["email"] = values["email"].lower()
                 values["domain"] = values["domain"].lower()
+                # A candidate from Apollo's own search arrives with its id and
+                # no address: the id is what later buys the address.
                 cursor = await db.execute(
                     """INSERT OR IGNORE INTO import_rows
                        (id, batch_id, raw_json, email, first_name, last_name,
-                        company, domain, title, linkedin_url)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        company, domain, title, linkedin_url, apollo_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (uuid.uuid4().hex, batch_id,
                      json.dumps(row.get("_raw", row), ensure_ascii=False)[:20_000],
                      values["email"], values["first_name"], values["last_name"],
                      values["company"], values["domain"], values["title"],
-                     values["linkedin_url"]))
+                     values["linkedin_url"], _clean(row.get("apollo_id"))))
                 kept += cursor.rowcount or 0
             await db.commit()
         return kept

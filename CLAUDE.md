@@ -56,7 +56,7 @@ People will ask "how does this work?" — explain it simply:
 
 - **"Can it use ChatGPT / Codex instead of Claude?"** → Yes, opt-in. Install Codex CLI 0.159.3 (`npm install -g @openai/codex@0.159.3`; other versions are refused), run `codex login` with ChatGPT, and set `brain: { provider: codex, model: gpt-5.5 }` in sellbird.yaml (or choose codex in `sellbird setup`, which suggests gpt-5.5, or `sellbird train <url> --provider codex --model gpt-5.5`). Any exact model ID from the account's catalog also works, including Luna, Sol and Terra models (e.g. `gpt-6.1-sol`): Sellbird runs them in a private text-only catalog copy with no tools. A blank model picks the highest-priority listed model; an unlisted model needs an explicit ID, and unknown model IDs or unrecognised tool modes are refused. Claude stays the default; Sellbird never switches providers on its own. Each Codex call runs isolated with no tools — see docs/codex.md. macOS and Linux only; on Windows, Codex is refused, so use Claude. Don't edit the user's own `~/.codex` config to make it work.
 
-- **"What's the dashboard?"** → Have the user run `sellbird dashboard` in their own terminal and open the private link it prints (`http://127.0.0.1:5555/#token=…`; `sellbird dashboard --url` prints it again). Don't read, print or repeat the token yourself: it unlocks the dashboard. It opens on **Today** — anything waiting on a decision, then the pipeline. Tabs for Signals, Discover, Companies, **Imports**, Contacts, Campaigns, Outbox, Inboxes, Conversations, Activity, Usage, Settings.
+- **"What's the dashboard?"** → Have the user run `sellbird dashboard` in their own terminal and open the private link it prints (`http://127.0.0.1:5555/#token=…`; `sellbird dashboard --url` prints it again). Don't read, print or repeat the token yourself: it unlocks the dashboard. It opens on **Today** — anything waiting on a decision, then the pipeline. Tabs for Signals, **Apollo** (segments and a free candidate search), Companies, **Imports** (staged lists, priced before anything is bought), Contacts, Campaigns, Outbox, Inboxes, Conversations, Activity, Usage, Settings.
 
 - **"What are signals?"** → Signals are the facts Sellbird collects about a business: who its current agency is, whether it's running ads, whether it has online booking, how it ranks. **Sellbird proposes; you confirm.** Nothing is collected until the user says yes on the Signals tab (or `sellbird signals --confirm ...`). That keeps spend intentional and makes every prospect list explainable — a cohort is a query over signals a human chose, not a black box.
 
@@ -250,9 +250,12 @@ sellbird discover --preset accelerator --provider serper   # ...Techstars, Antle
 sellbird discover --preset funding --provider serper       # companies announcing a raise
 ```
 
-The dashboard's **Discover** tab is the same thing with the tradeoffs laid out
-side by side: what each source does, what it costs, its free tier, and which
-`.env` keys it needs. Nothing is called until the user presses Run.
+`sellbird discover` is still the CLI for this, with the tradeoffs laid out by
+`--providers`: what each source does, what it costs, its free tier, and which
+`.env` keys it needs. Nothing is called until the user says so. **This fork's
+dashboard has no Discover tab**: it sources from Apollo, so that tab is the
+**Apollo** page instead (segments, a free people search, candidates staged for
+pricing on Imports).
 
 | Source | Cost | Free tier | Best for |
 |---|---|---|---|

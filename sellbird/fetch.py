@@ -52,7 +52,23 @@ from sellbird.paths import PROJECT_ROOT
 
 logger = logging.getLogger("sellbird.fetch")
 
-SEGMENTS_FILE = PROJECT_ROOT / "segments.yaml"
+def _segments_file() -> Path:
+    """Who Apollo is asked about.
+
+    The home folder's copy wins, because that is the one an operator edits
+    and the one a Docker volume keeps. A deployment that has never had one
+    falls back to the copy shipped beside the package, so searching works
+    out of the box instead of failing with "no segments".
+    """
+    home_copy = PROJECT_ROOT / "segments.yaml"
+    if home_copy.exists():
+        return home_copy
+    from sellbird.paths import PACKAGE_ROOT
+    bundled = Path(PACKAGE_ROOT) / "segments.yaml"
+    return bundled if bundled.exists() else home_copy
+
+
+SEGMENTS_FILE = _segments_file()
 LOCAL_LEDGER = PROJECT_ROOT / "data" / "fetch_ledger.json"
 EXPORT_DIR = PROJECT_ROOT / "exports"
 # Two files, updated in place by every run: every contact ever fetched, and

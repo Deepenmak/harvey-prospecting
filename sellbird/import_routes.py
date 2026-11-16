@@ -271,3 +271,97 @@ async def apollo_operations():
     independent of any one import.
     """
     return {"ops": apollo_ops.menu()}
+
+
+@router.get("/api/apollo/segments")
+async def apollo_segments():
+    """Who Apollo is asked about: the segments in segments.yaml, with what
+    the ledger says has been spent so far."""
+    from sellbird.fetch import LOCAL_LEDGER, load_segments
+
+    try:
+        spec = load_segments()
+    except Exception as e:
+        return JSONResponse({"error": f"segments.yaml could not be read: {e}"},
+                            status_code=500)
+    ledger = {}
+    if LOCAL_LEDGER.exists():
+        try:
+            ledger = json.loads(LOCAL_LEDGER.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            ledger = {}
+    runs = ledger.get("runs") or []
+    segments = [{
+        "key": s.get("key", ""), "label": s.get("label", ""),
+        "locations": s.get("locations") or [],
+        "titles": len(s.get("titles") or []),
+        "employees": s.get("employees") or [],
+        "fetched": sum(int(r.get("prospects") or 0) for r in runs
+                       if r.get("segment") == s.get("key")),
+    } for s in spec.get("segments") or []]
+    store = _store()
+    await store.init_db()
+    return {
+        "segments": segments,
+        "per_run_credits": int(spec.get("per_run_credits", 10) or 10),
+        "phase_credit_cap": int(spec.get("phase_credit_cap", 0) or 0),
+        "credits_used": sum(int(r.get("credits_used") or 0) for r in runs),
+        "people_seen": len(ledger.get("seen_ids") or []),
+        "credits_today": await import_service._spent_today(store),
+        "key_set": bool(_apollo_key()),
+    }
+
+
+def _apollo_key() -> str:
+    from sellbird.integrations.apollo import apollo_key
+    try:
+        return apollo_key()
+    except Exception:
+        return ""
+
+
+@router.post("/api/apollo/candidates")
+async def find_candidates(request: Request):
+    """Apollo's free people search, staged for review. Spends nothing.
+
+    The search returns names, titles and companies with the addresses
+    withheld, which is the whole point: the list can be looked at, cut down
+    and priced before a single credit is spent on it.
+    """
+    global _run_task
+    body = await _body(request)
+    segment = str(body.get("segment") or "mix")[:60]
+    try:
+        limit = int(body.get("limit") or 25)
+    except (TypeError, ValueError):
+        return _refuse("How many candidates? Give a whole number.")
+    if not 1 <= limit <= 500:
+        return _refuse("Ask for between 1 and 500 candidates.")
+    if not _apollo_key():
+        return _refuse("No Apollo key yet. Add it on the Settings tab.")
+    if _run_task is not None and not _run_task.done():
+        return _refuse("Something is already running. Wait for it to finish.", 409)
+
+    store = _store()
+    await store.init_db()
+    _run_state.update(state="running", batch_id="", op="apollo_search",
+                      message="", report=None)
+
+    async def _go():
+        try:
+            from sellbird.config import load_config
+            result = await import_service.stage_from_apollo(
+                store, load_config(), segment, limit)
+            _run_state.update(state="done", batch_id=result["batch_id"],
+                              report=result,
+                              message=f"{result['staged']} candidates staged. "
+                                      "Nothing has been spent.")
+        except StagingError as e:
+            _run_state.update(state="failed", message=str(e))
+        except Exception as e:
+            logger.exception("apollo search failed")
+            _run_state.update(state="failed",
+                              message=f"The search failed: {type(e).__name__}")
+
+    _run_task = asyncio.create_task(_go())
+    return {"success": True, "started": True, "segment": segment, "limit": limit}

@@ -149,6 +149,17 @@ OPS: dict[str, ApolloOp] = {
         gives="Full contact record and a verified/guess email status",
         default=True,
     ),
+    "people_enrich_id": ApolloOp(
+        key="people_enrich_id",
+        label="Get the addresses for these candidates",
+        blurb="Apollo's free search names the people but withholds their "
+              "addresses. This buys them: the work email, whether it is "
+              "deliverable, and the rest of the record.",
+        credits_per_unit=1, unit="contact",
+        requires=("apollo_id",),
+        gives="Work email address, seniority, location and company detail",
+        default=True,
+    ),
     "people_match_name_domain": ApolloOp(
         key="people_match_name_domain",
         label="Find each person by name and company",
@@ -211,8 +222,9 @@ OPS: dict[str, ApolloOp] = {
 
 # The order the menu shows them in: what you will probably want, then the free
 # lookups, then the costly one.
-MENU_ORDER = ("people_match_email", "people_match_name_domain", "org_enrich",
-              "org_job_postings", "people_search", "org_search", "phone_reveal")
+MENU_ORDER = ("people_enrich_id", "people_match_email", "people_match_name_domain",
+              "org_enrich", "org_job_postings", "people_search", "org_search",
+              "phone_reveal")
 
 
 def menu(rows: Iterable[dict] | None = None) -> list[dict]:
@@ -327,6 +339,15 @@ async def _run_match_email(client, rows: list[dict]) -> list[OpResult]:
     return [_person_result(row, person) for row, person in zip(rows, people)]
 
 
+async def _run_enrich_id(client, rows: list[dict]) -> list[OpResult]:
+    """Candidates from Apollo's own free search, bought one at a time."""
+    out = []
+    for row in rows:
+        person = await client.enrich(row_field(row, "apollo_id"))
+        out.append(_person_result(row, person))
+    return out
+
+
 async def _run_match_name(client, rows: list[dict]) -> list[OpResult]:
     out = []
     for row in rows:
@@ -369,6 +390,7 @@ async def _run_people_search(client, rows: list[dict]) -> list[OpResult]:
 
 _RUNNERS: dict[str, Callable[..., Awaitable[list[OpResult]]]] = {
     "people_match_email": _run_match_email,
+    "people_enrich_id": _run_enrich_id,
     "people_match_name_domain": _run_match_name,
     "org_enrich": _run_org_enrich,
     "org_search": _run_people_search,

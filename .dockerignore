@@ -8,6 +8,9 @@
 !LICENSE
 !requirements.txt
 !sellbird.yaml
+# Who Apollo is asked about. Seeded onto the volume by start.sh, where it
+# can be edited; without it in the image there is nothing to seed from.
+!segments.yaml
 !.env.example
 !sellbird/
 !sellbird/**

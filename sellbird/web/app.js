@@ -421,7 +421,7 @@ function loadCurrentTab() {
   switch (currentTab) {
     case 'today': loadLiveStatus(); loadRenameNotice(); loadToday(); loadTrend(); loadFunnel(); loadSetupStatus(); loadRuns(); loadTodayActivity(); break;
     case 'signals': loadSignals(); break;
-    case 'discover': loadDiscoverProviders(); break;
+    case 'discover': loadApollo(); break;
     case 'companies': if (!companyDrill) loadCompanies(); break;
     case 'imports': loadImports(); break;
     case 'prospects': loadProspects(); break;
@@ -872,203 +872,113 @@ async function setSignals(codes, status) {
   loadSignals();
 }
 
-// ── Discover: pick a source, price it, then run it ──
+// ── Apollo: who exists, found free, priced before it is bought ──
+//
+// Apollo's people search costs nothing and withholds the addresses, so the
+// list can be looked at and cut down before a credit is spent. Candidates
+// land on the Imports tab, where buying their addresses is priced and capped.
 
-let _provider = null;
-let _discoverPoll = null;
+let _apolloPoll = null;
 
-async function loadDiscoverProviders() {
-  const el = document.getElementById('discover-providers');
-  const data = await api('/api/discover/providers');
-  if (!data || !data.providers) { el.innerHTML = offlineState(); return; }
-
-  _provider = _provider || data.selected || data.default;
-  el.innerHTML = '<div class="prov-grid">' + data.providers.map(p => {
-    const ready = p.configured
-      ? '<span class="badge t-good">ready</span>'
-      : '<span class="badge t-waiting">needs a key</span>';
-    return '<div class="prov-card ' + (p.key === _provider ? 'selected' : '') +
-      '" onclick="pickProvider(' + jsq(p.key) + ')">' +
-      '<div class="prov-head"><h3>' + escHtml(p.label) + '</h3>' + ready + '</div>' +
-      '<div class="blurb">' + escHtml(p.blurb) + '</div>' +
-      '<div class="row"><span class="k">Cost</span><span class="v">' +
-        escHtml(p.cost_note) + '</span></div>' +
-      '<div class="row"><span class="k">Free</span><span class="v">' +
-        escHtml(p.free_tier) + '</span></div>' +
-      (p.needs_key
-        ? '<div class="row"><span class="k">Setup</span><span class="v">' +
-          escHtml(p.env_keys.join(', ')) + ' in .env &middot; ' +
-          '<a href="' + safeHref(p.signup_url) + '" target="_blank" rel="noopener noreferrer">get a key</a>' +
-          '</span></div>'
-        : '') +
-      (p.caveat ? '<div class="caveat">' + escHtml(p.caveat) + '</div>' : '') +
-    '</div>';
-  }).join('') + '</div>';
-
-  const running = data.running;
-  // Reading sites can't be stopped part-way; only a discovery run can.
-  document.getElementById('disc-stop').style.display = running && data.running_kind !== 'profile' ? '' : 'none';
-  renderProfileCard(data.unprofiled || 0, running);
-  if (running && !_discoverPoll) {
-    _discoverPoll = setInterval(loadDiscoverProviders, 4000);
-  } else if (!running && _discoverPoll) {
-    clearInterval(_discoverPoll);
-    _discoverPoll = null;
-    // A finished run leaves the button stuck on "Running…" otherwise.
-    const btn = document.getElementById('disc-run');
-    btn.disabled = true;
-    btn.textContent = 'Estimate first';
-    showToast(data.running_kind === 'profile' ? 'Finished reading websites.' : 'Discovery finished.', 'success');
-  }
-  renderDiscoverResult(data.last_report, running);
-}
-
-function pickProvider(key) {
-  _provider = key;
-  document.getElementById('disc-run').disabled = true;
-  document.getElementById('disc-run').textContent = 'Estimate first';
-  document.getElementById('discover-estimate').innerHTML = '';
-  loadDiscoverProviders();
-}
-
-function discoverBody() {
-  const raw = document.getElementById('disc-cities').value.trim();
-  return {
-    provider: _provider,
-    // Semicolons or newlines, never commas: "Denver, CO" is one city.
-    cities: raw ? raw.split(/[;\n]/).map(c => c.trim()).filter(Boolean) : [],
-    depth: Number(document.getElementById('disc-depth').value) || 30,
-    limit: Number(document.getElementById('disc-limit').value) || 100,
-    max_spend: Number(document.getElementById('disc-cap').value) || 1,
-    preset: (document.getElementById('disc-preset') || {}).value || '',
-  };
-}
-
-async function estimateDiscovery() {
-  const el = document.getElementById('discover-estimate');
-  el.innerHTML = '<p class="muted" style="font-size:13px">Pricing it…</p>';
-  const data = await api('/api/discover/estimate', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(discoverBody()),
-  });
+async function loadApollo() {
+  const data = await api('/api/apollo/segments');
+  const el = document.getElementById('apollo-segments');
   if (!data || data.error) {
-    el.innerHTML = '<div class="test-result error">' +
-      escHtml((data && data.error) || 'Could not estimate.') + '</div>';
+    el.innerHTML = offlineState();
     return;
   }
+  renderApolloLedger(data);
 
-  const cap = discoverBody().max_spend;
-  const over = data.estimated_cost > cap;
-  el.innerHTML = '<div class="estimate-box">' +
-    '<div class="amount ' + (data.free ? 'free' : 'paid') + '">' +
-      (data.free ? 'Free' : '$' + data.estimated_cost.toFixed(4)) + '</div>' +
-    '<div class="muted" style="font-size:13px;margin-top:2px">' +
-      data.query_count + ' quer' + (data.query_count === 1 ? 'y' : 'ies') +
-      (data.free ? '' : ' &middot; cap is $' + cap.toFixed(2)) + '</div>' +
-    (over ? '<div class="test-result error" style="margin-top:12px">' +
-      'Over your cap. Raise the cap or narrow the search.</div>' : '') +
-    '<div class="query-list">' +
-      data.queries.slice(0, 40).map(escHtml).join('<br>') +
-      (data.queries.length > 40 ? '<br>… and ' + (data.queries.length - 40) + ' more' : '') +
-    '</div></div>';
-
-  const btn = document.getElementById('disc-run');
-  btn.disabled = over;
-  btn.textContent = over ? 'Over cap'
-    : (data.free ? 'Run — free' : 'Run — spend up to $' + data.estimated_cost.toFixed(2));
-}
-
-async function runDiscovery() {
-  const btn = document.getElementById('disc-run');
-  btn.disabled = true;
-  btn.textContent = 'Running…';
-  const data = await api('/api/discover/run', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(discoverBody()),
-  });
-  if (data && data.success) {
-    showToast('Discovery started — ' + data.queries + ' queries.', 'success');
-  } else {
-    showToast((data && data.message) || 'Could not start.', 'error');
-    btn.disabled = false;
+  const pick = document.getElementById('apollo-segment');
+  if (pick && !pick.options.length) {
+    pick.innerHTML = '<option value="mix">Every segment, in rotation</option>' +
+      (data.segments || []).map(s =>
+        '<option value="' + escHtml(s.key) + '">' + escHtml(s.label || s.key) + '</option>').join('');
   }
-  loadDiscoverProviders();
+  const limit = document.getElementById('apollo-limit');
+  if (limit && !limit.dataset.set) {
+    limit.value = data.per_run_credits || 25;
+    limit.dataset.set = '1';
+  }
+
+  if (!(data.segments || []).length) {
+    el.innerHTML = emptyState(icon('discover'), 'No segments yet',
+      'Who Apollo is asked about lives in <b>segments.yaml</b>: titles, locations and company size per segment.');
+    return;
+  }
+  el.innerHTML = '<div class="inbox-help">' + data.segments.map(s =>
+    '<div class="inset"><h4>' + escHtml(s.label || s.key) + '</h4>' +
+    '<p class="desc">' + escHtml((s.locations || []).join(', ')) +
+    (s.employees && s.employees.length ? ' &middot; ' + escHtml(staffRange(s.employees)) : '') +
+    ' &middot; ' + Number(s.titles) + ' titles</p>' +
+    '<p class="desc"><b>' + Number(s.fetched) + '</b> contacts fetched so far</p></div>').join('') +
+    '</div>';
 }
 
-async function stopDiscovery() {
-  const data = await api('/api/discover/stop', {method: 'POST'});
-  showToast(data && data.success ? 'Stopping after the current query.'
-                                 : failMsg(data, 'Could not stop.'), data && data.success ? 'success' : 'error');
-  loadDiscoverProviders();
+// Apollo writes a headcount band as "200,5000". Say it the way a person would.
+function staffRange(bands) {
+  return bands.map(band => String(band).split(',')
+    .map(n => Number(n).toLocaleString()).join(' to ')).join(', ') + ' staff';
 }
 
-// Companies found but not looked at: reading their sites is free and
-// model-free, and it is what makes an email specific.
-function renderProfileCard(pending, running) {
-  const el = document.getElementById('discover-profile');
+function renderApolloLedger(data) {
+  const el = document.getElementById('apollo-ledger');
   if (!el) return;
-  if (!pending) { el.innerHTML = ''; return; }
-  el.innerHTML = '<div class="subhead">Read websites</div><div class="card"><div class="queue-item good" style="padding:0;border:0;box-shadow:none">' +
-    '<div class="qtext"><div class="qtitle">' + pending + ' compan' + (pending === 1 ? 'y' : 'ies') +
-    ' not looked at yet</div><div class="qdetail">Free, no account needed. Sellbird reads each site for ' +
-    'who their agency is, what they are missing, and whether they run ads. Up to 200 per run.</div></div>' +
-    '<button class="btn btn-primary btn-sm" onclick="runProfile(this)"' + (running ? ' disabled' : '') + '>' +
-    (running ? 'Busy…' : 'Read their sites') + '</button></div></div>';
+  const cap = Number(data.phase_credit_cap) || 0;
+  el.innerHTML = '<div class="inbox-summary">' +
+    '<span><b>' + Number(data.credits_used) + '</b> credits spent, all time' +
+    (cap ? ' of <b>' + cap + '</b>' : '') + '</span>' +
+    '<span><b>' + Number(data.credits_today) + '</b> today</span>' +
+    '<span><b>' + Number(data.people_seen) + '</b> people seen, never bought twice</span>' +
+    '<span>' + (data.key_set ? 'Key set' : '<b>No API key yet</b>') + '</span></div>' +
+    (data.key_set ? '' : '<div class="notice bad">Apollo has no API key here. ' +
+      'Add it on the Settings tab before searching.</div>');
 }
 
-async function runProfile(btn) {
-  btn.disabled = true;
-  btn.textContent = 'Starting…';
-  const data = await api('/api/profile/run', {method: 'POST'});
-  if (data && data.success) {
-    showToast(data.pending ? 'Reading ' + Math.min(data.pending, 200) + ' websites.' : 'Every site is already read.', 'success');
-    if (data.pending && !_discoverPoll) _discoverPoll = setInterval(loadDiscoverProviders, 4000);
-  } else {
-    showToast(failMsg(data, 'Could not start.'), 'error');
-  }
-  loadDiscoverProviders();
-}
-
-function renderDiscoverResult(report, running) {
-  const el = document.getElementById('discover-result');
-  if (running) {
-    el.innerHTML = '<div class="card"><h2>Running…</h2>' +
-      '<p class="muted" style="font-size:13px">Sellbird is working through the ' +
-      'queries. Results land in Companies, and the run log is on Today.</p></div>';
+async function findCandidates() {
+  const go = document.getElementById('apollo-go');
+  const out = document.getElementById('apollo-result');
+  go.disabled = true;
+  out.innerHTML = '<div class="notice wait">Searching Apollo. This spends nothing.</div>';
+  const data = await api('/api/apollo/candidates', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      segment: document.getElementById('apollo-segment').value || 'mix',
+      limit: Number(document.getElementById('apollo-limit').value) || 25,
+    })
+  });
+  if (!data || !data.success) {
+    go.disabled = false;
+    out.innerHTML = '<div class="notice bad">' + escHtml(failMsg(data, 'Could not search.')) + '</div>';
     return;
   }
-  if (!report) { el.innerHTML = ''; return; }
+  if (!_apolloPoll) _apolloPoll = setInterval(pollCandidates, 2500);
+}
 
-  const stat = (label, value, tone) =>
-    '<div class="stat-card"><div class="label">' + label + '</div>' +
-    '<div class="value"' + (tone ? ' style="color:var(--' + tone + ')"' : '') + '>' +
-    value + '</div></div>';
-
-  if (report.profiled_companies !== undefined && report.new_companies === undefined) {
-    el.innerHTML = '<div class="subhead">Last run</div><div class="stats-grid">' +
-      stat('Websites read', report.profiled_companies || 0, 'accent') +
-      stat('Facts recorded', report.profile_observations || 0) +
-      stat('Cost', 'free') + '</div>' +
-      (report.stopped ? '<div class="test-result error" style="margin-top:14px">Stopped early: ' + escHtml(report.stopped) + '</div>' : '');
+async function pollCandidates() {
+  const run = await api('/api/imports/run/status');
+  if (!run || run.state === 'running') return;
+  clearInterval(_apolloPoll); _apolloPoll = null;
+  const go = document.getElementById('apollo-go');
+  const out = document.getElementById('apollo-result');
+  if (go) go.disabled = false;
+  if (!out) return;
+  if (run.state === 'failed') {
+    out.innerHTML = '<div class="notice bad">' + escHtml(run.message || 'That search failed.') + '</div>';
     return;
   }
-  el.innerHTML = '<div class="subhead">Last run</div>' +
-    '<div class="stats-grid">' +
-      stat('New companies', report.new_companies || 0, 'accent') +
-      stat('Already known', report.known_companies || 0) +
-      stat('Observations', report.observations || 0) +
-      stat('Filtered as junk', report.junk || 0) +
-      (report.profiled_companies ? stat('Websites read', report.profiled_companies) : '') +
-      stat('Actual cost', report.actual_cost ? '$' + report.actual_cost.toFixed(4) : 'free') +
-    '</div>' +
-    (report.stopped ? '<div class="test-result error" style="margin-top:14px">' +
-      'Stopped early: ' + escHtml(report.stopped) + '</div>' : '') +
-    ((report.errors || []).length
-      ? '<div class="card" style="margin-top:14px"><h2>Problems</h2>' +
-        (report.errors || []).slice(0, 8).map(e =>
-          '<div class="check-help">' + escHtml(e) + '</div>').join('') + '</div>'
-      : '');
+  out.innerHTML = '<div class="notice good">' + escHtml(run.message || 'Candidates staged.') +
+    ' <a href="#" onclick="openStagedBatch(&quot;' + escHtml(run.batch_id || '') +
+    '&quot;);return false">Review them</a></div>';
+  showToast(run.message || 'Candidates staged.', 'success');
+  loadApollo();
 }
+
+function openStagedBatch(id) {
+  if (id) _importBatch = id;
+  showTab('imports', document.querySelector('nav button[onclick*="imports"]'));
+}
+
 
 // ── Cohort builder: a prospect list is a query ──
 

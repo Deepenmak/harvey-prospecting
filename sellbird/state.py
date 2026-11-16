@@ -617,6 +617,14 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_import_rows_batch_status
       ON import_rows(batch_id, status);
     """,
+    # ── v18: candidates from Apollo's own search dedup on its id ──
+    # A staged candidate has no address yet — its Apollo id is the only
+    # identity it has, and buying the same one twice is the mistake the
+    # email index already prevents for everyone else.
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_import_rows_apollo
+      ON import_rows(batch_id, apollo_id) WHERE apollo_id != '';
+    """,
 ]
 
 BRAIN_PROVIDERS = ("claude", "codex")

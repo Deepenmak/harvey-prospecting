@@ -28,7 +28,7 @@ The sidebar is grouped by what you're doing: **Work** (what needs you), **Pipeli
 
 **Pipeline**
 - **Signals** — the confirmation gate and the cohort builder
-- **Discover** — the provider menu with prices side by side, an estimate, then a run; plus reading the sites of companies found but not yet looked at
+- **Apollo** — where contacts come from: the segments Apollo is asked about, what the ledger has spent, and a free people search. The search withholds addresses, so its results are staged on Imports rather than bought. (Upstream Sellbird's local-business Discover sources live on in `sellbird discover`; a fork sourcing from Apollo has no use for the tab.)
 - **Imports** — a list that arrived from outside, before it costs anything. Sellbird parses the file, maps its columns and prices every Apollo operation against those exact rows: what each one needs, how many rows qualify, and the ceiling in credits. Claude reads the file alongside and says which route fits. Nothing is called until you approve a cap, contacts already in your pipeline are left out of the spend, and an operation never runs twice on the same row
 - **Companies / Contacts** — everything found, searchable, with CSV export. Companies are sorted by a 0-100 fit score and show their status (emailed, draft waiting, or why not contacted); click one for its details card, or export the whole company register
 - **Campaigns** — each sequence Sellbird wrote, who it's going to, and per-campaign feedback for the writer

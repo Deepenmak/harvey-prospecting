@@ -60,6 +60,64 @@ async def stage_file(store: ImportStore, name: str, text: str,
             "duplicates": duplicates, "analysis": analysis}
 
 
+async def stage_from_apollo(store: ImportStore, config, segment: str = "mix",
+                            limit: int = 25) -> dict:
+    """Ask Apollo who exists, and stage the answer. Spends nothing.
+
+    Apollo's people search is free and returns names, titles and companies
+    with the addresses withheld. That is exactly a staged list: real
+    candidates, no credit spent, and a priced way to buy the addresses when
+    a human decides they are worth it. The paid half of ``sellbird fetch``
+    is never reached from here.
+    """
+    import csv
+
+    from sellbird import fetch
+
+    report = await fetch.run_fetch(store, config, segment=segment,
+                                   credits=max(1, int(limit)), plan=True)
+    if report.stopped:
+        raise StagingError(report.stopped)
+    path = fetch.PLAN_FILE
+    if not path.exists():
+        raise StagingError("Apollo returned no candidates for that segment")
+    with open(path, newline="", encoding="utf-8") as f:
+        plan = list(csv.DictReader(f))
+    if not plan:
+        raise StagingError("Apollo returned no candidates for that segment")
+
+    rows = []
+    for candidate in plan:
+        website = (candidate.get("website") or "").strip()
+        rows.append({
+            "apollo_id": candidate.get("apollo_id", ""),
+            "first_name": candidate.get("first_name", ""),
+            "title": candidate.get("title", ""),
+            "company": candidate.get("company", ""),
+            "domain": website.replace("https://", "").replace("http://", "")
+                             .split("/")[0].removeprefix("www."),
+            "_raw": candidate,
+        })
+
+    label = f"Apollo: {report.segment}"
+    batch_id = await store.create_batch(name=label, source="apollo")
+    staged = await store.add_rows(batch_id, rows)
+    duplicates = await store.mark_known_contacts(batch_id)
+    stored = await store.get_rows(batch_id)
+    analysis = fallback(stored, ["apollo"], {}, duplicates)
+    analysis["pending"] = False
+    analysis["summary"] = (
+        f"{staged} candidates from Apollo's free search across "
+        f"{report.segment}. Their addresses are withheld until bought: "
+        f"{len(apollo_ops.OPS['people_enrich_id'].eligible(stored))} of them "
+        "at 1 credit each.")
+    await store.update_batch(batch_id, status="review",
+                             analysis_json=json.dumps(analysis))
+    return {"batch_id": batch_id, "staged": staged, "duplicates": duplicates,
+            "segment": report.segment, "searched": report.searched,
+            "analysis": analysis}
+
+
 async def analyse_batch(store: ImportStore, batch_id: str, brain) -> dict:
     """Claude's reading of a staged batch, folded into what is already there.
 
