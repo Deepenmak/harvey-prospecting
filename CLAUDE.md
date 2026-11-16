@@ -345,6 +345,7 @@ Users will come back with questions and tasks. Common ones:
 - **"I want to change what Sellbird says"** → Skills are in `skills/`, prompts are in `prompts/`. Both are plain markdown files. Edit them directly.
 - **"Train Sellbird on a different product"** → `sellbird train <new-url>`
 - **"How do I see the database?"** → It's at `data/sellbird.db`. They can open it with any SQLite tool, or ask you to query it.
+- **"Where do the Apollo contacts actually live?"** → In the database, not in `exports/`. Every run is a row in `apollo_runs`, every contact it returned is a row in `apollo_contacts`, and every person and company already spoken for is a row in `apollo_seen`. That is what makes a redeploy safe: the volume keeps the database, so no search re-offers someone already paid for. `exports/contacts_all.csv` and `contacts_with_email.csv` are written **from** it after each run and are rebuilt if lost — on boot, when the Apollo tab notices, with **Check the record** on that tab, or with `sellbird fetch --sync`. Judgement a skill writes into the CSV is read back in by the same sync, so the two never drift.
 - **"I have a list of contacts to bring in"** (a CSV from anywhere, a cloud run, a list someone else built) → dashboard **Contacts → Add contacts**, or `sellbird imports --stage <file.csv>`. It is **staged**, not imported: Sellbird maps the columns, Claude reads the file, and the **Imports** tab prices every way of enriching it against those exact rows before a credit moves. Choose an operation, approve a ceiling, then promote the finished rows into the pipeline. Contacts already in the pipeline are marked and left out of the spend. A finished Sellbird export can still go straight in with `sellbird import-contacts <file.json>` (`--runs runs.json` restores the fetch ledger too); it is idempotent, and never touches a contact's status or history.
 - **"I just want the prospect list"** → `sellbird export` writes a sequencer-ready CSV (verified/risky emails only; `--all` for everything). Also available as Export buttons on the dashboard's Contacts tab. Sellbird is valuable purely as a list-builder even if the user never lets it send.
 
@@ -390,6 +391,7 @@ sellbird export --all          # Full raw list, no filters
 sellbird companies             # Company register CSV: every company, its fit score, and why it wasn't contacted
 sellbird import-contacts FILE  # Fold a finished contact list (JSON) straight into the contact files and the database
 sellbird imports               # The staging area: --stage FILE, then --enrich OP --max-credits N, then --promote
+sellbird fetch --sync          # Make the database and exports/ agree; rebuilds the contact files after a redeploy. Calls nothing, spends nothing
 sellbird gmail auth            # One-time Gmail OAuth (when provider: gmail)
 sellbird gmail test            # Verify the Gmail connection
 sellbird outbox                # Review queued emails; --approve <id> / --approve-all / --reject <id>

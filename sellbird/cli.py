@@ -666,12 +666,25 @@ def cmd_fetch(args):
     import json
 
     from sellbird.config import load_config, load_env
-    from sellbird.fetch import CONTACTS_FILE, PLAN_FILE, push_angles, run_fetch
+    from sellbird.fetch import (CONTACTS_FILE, PLAN_FILE, push_angles, reconcile,
+                                run_fetch)
     from sellbird.state import StateManager
 
     load_env()  # APOLLO_HARVEY_KEY, SHEET_WEBHOOK_URL, SHEET_TOKEN from .env
 
     async def _fetch():
+        if args.sync:
+            state = StateManager()
+            await state.init_db()
+            result = await reconcile(state)
+            adopted = (result.get("adopted") or {}).get("contacts") or 0
+            print(f"\n  {result['stored']} contacts in the database, "
+                  f"{result['credits_used']} credits spent all time.")
+            if adopted:
+                print(f"  {adopted} read in from the contact files.")
+            print(f"  Both files in exports/ written from it "
+                  f"({result['files']} rows). Nothing was spent.\n")
+            return
         if args.push_angles:
             n, sent = await push_angles(str(CONTACTS_FILE) if args.push_angles == "DEFAULT"
                                         else args.push_angles)
@@ -1452,6 +1465,11 @@ def main():
                      help="Enrich only the plan rows marked a or b "
                           "(default: exports/plan.csv)")
     sub.add_argument("--json", action="store_true", help="Print the report as JSON")
+    sub.add_argument("--sync", action="store_true",
+                     help="Make the database and the two contact files agree, "
+                          "then exit. Rebuilds exports/ after a redeploy and "
+                          "reads any hand-edited judgement back in. Calls "
+                          "nothing and spends nothing")
     sub.add_argument("--push-angles", nargs="?", const="DEFAULT",
                      default="", metavar="CSV",
                      help="Send the angle column to the sheet "

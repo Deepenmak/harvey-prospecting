@@ -2643,8 +2643,11 @@ async def get_today():
             clock_config = load_config(str(_resolve_config_file()))
         except Exception:
             clock_config = None
-        if clock_config is not None:
-            quiet = clock_config.usage.quiet_hours
+        # getattr, not attribute access: Today is the page people see first,
+        # and one extra check must never be able to take the whole page down
+        # with it over a config shape it did not expect.
+        quiet = getattr(getattr(clock_config, "usage", None), "quiet_hours", None)
+        if quiet is not None:
             if quiet.problem:
                 items.append({
                     "key": "timezone", "tone": "bad",

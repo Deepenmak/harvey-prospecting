@@ -305,6 +305,19 @@ async def heartbeat(stop_event: asyncio.Event | None = None):
     await state.init_db()
     logger.info("Database initialized.")
 
+    # A redeploy brings a new container and the same volume. The database is
+    # the record of every Apollo run; the two contact files are rebuilt from
+    # it here, so a lost or half-written exports/ folder repairs itself on
+    # boot instead of quietly costing credits later.
+    try:
+        from sellbird.fetch import reconcile
+        state_of_play = await reconcile(state)
+        if state_of_play.get("stored"):
+            logger.info("Apollo record: %d contacts, %d credits spent.",
+                        state_of_play["stored"], state_of_play["credits_used"])
+    except Exception as exc:  # never a reason not to start
+        logger.warning("Apollo record not reconciled: %s", exc)
+
     # Import agents here to avoid circular imports
     from sellbird.agents.scout import Scout
     from sellbird.agents.writer import Writer

@@ -625,6 +625,63 @@ MIGRATIONS: list[str] = [
     CREATE UNIQUE INDEX IF NOT EXISTS uq_import_rows_apollo
       ON import_rows(batch_id, apollo_id) WHERE apollo_id != '';
     """,
+    # -- v19: every Apollo run, and every contact it returned, in the database --
+    # Until now the record of what Apollo had already been asked about lived
+    # in two loose files: data/fetch_ledger.json and exports/contacts_all.csv.
+    # A deployment that lost its volume, or a container stopped halfway
+    # through a write, forgot which people had already been paid for -- and
+    # the next search would offer them again and charge for them again. The
+    # database is the one thing that is migrated, backed up and mounted with
+    # everything else, so it is the record now and those files are rebuilt
+    # from it.
+    #
+    # apollo_contacts keeps the indexed fields the UI filters on and the
+    # whole row in row_json, so a new judgement column (fit, call_brief,
+    # proposal_draft -- the list has grown four times already) needs no
+    # migration. apollo_seen is the ledger proper: one row per Apollo person
+    # id ever enriched and per company ever taken or skipped, so "we already
+    # have this person" survives anything short of losing the database.
+    """
+    CREATE TABLE IF NOT EXISTS apollo_runs (
+      id TEXT PRIMARY KEY, ran_at TIMESTAMP, segment TEXT DEFAULT '',
+      mode TEXT DEFAULT 'fetch', searched INTEGER DEFAULT 0,
+      candidates INTEGER DEFAULT 0, enriched INTEGER DEFAULT 0,
+      credits_used INTEGER DEFAULT 0, contacts INTEGER DEFAULT 0,
+      stopped TEXT DEFAULT '', ledger TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+    CREATE TABLE IF NOT EXISTS apollo_contacts (
+      apollo_id TEXT PRIMARY KEY, run_id TEXT DEFAULT '', segment TEXT DEFAULT '',
+      fetched_at TIMESTAMP, first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
+      title TEXT DEFAULT '', email TEXT DEFAULT '', email_status TEXT DEFAULT '',
+      company TEXT DEFAULT '', domain TEXT DEFAULT '', score INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'new', row_json TEXT DEFAULT '{}',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+
+    CREATE INDEX IF NOT EXISTS idx_apollo_contacts_segment
+      ON apollo_contacts(segment, score);
+    CREATE INDEX IF NOT EXISTS idx_apollo_contacts_run ON apollo_contacts(run_id);
+    CREATE INDEX IF NOT EXISTS idx_apollo_contacts_email
+      ON apollo_contacts(email) WHERE email != '';
+
+    CREATE TABLE IF NOT EXISTS apollo_seen (
+      kind TEXT NOT NULL, value TEXT NOT NULL, reason TEXT DEFAULT 'fetched',
+      run_id TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (kind, value));
+    """,
+    # -- v20: two people really can share one address --
+    # v19 first shipped with a unique index on apollo_contacts(email). A role
+    # address (info@, claims@) behind two Apollo person ids is uncommon but
+    # legal, and the index turned it into an IntegrityError that lost the
+    # whole run's contacts -- the exact failure these tables exist to stop.
+    # The identity here is the Apollo id, which is already the primary key.
+    # Deduplicating by address is prospects' job, and it already does it.
+    """
+    DROP INDEX IF EXISTS uq_apollo_contacts_email;
+    CREATE INDEX IF NOT EXISTS idx_apollo_contacts_email
+      ON apollo_contacts(email) WHERE email != '';
+    """,
 ]
 
 BRAIN_PROVIDERS = ("claude", "codex")

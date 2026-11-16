@@ -205,7 +205,9 @@
       <p>Where every contact comes from. Searching Apollo is free and shows you who exists;
          their addresses are withheld until you buy them, one credit each. Nothing is spent here.</p>
     </div>
-    <div class="page-actions" id="apollo-actions"></div>
+    <div class="page-actions" id="apollo-actions">
+      <button class="btn btn-secondary" onclick="syncApollo()">Check the record</button>
+    </div>
   </div>
   <div id="apollo-ledger"></div>
 
@@ -231,6 +233,10 @@
     </div>
     <div id="apollo-result"></div>
   </div>
+
+  <div class="subhead">Every run
+    <span class="hint">Kept in the database, so a redeploy does not lose it</span></div>
+  <div id="apollo-runs"></div>
 </div>
 
 <!-- Companies -->

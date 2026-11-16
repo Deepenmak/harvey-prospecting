@@ -61,3 +61,32 @@ def resolve_home(env: Mapping[str, str] = os.environ, package_root: Path = PACKA
 
 
 PROJECT_ROOT = resolve_home()
+
+
+def write_atomic(path, text: str, newline: str | None = None,
+                 encoding: str = "utf-8") -> None:
+    """Write a whole file or none of it.
+
+    A container that stops mid-``write_text`` leaves a truncated file behind,
+    and for the fetch ledger or the contact files that means forgetting which
+    people Apollo has already been paid for. The temp file is created in the
+    same directory so ``os.replace`` is a rename on the same filesystem, which
+    is atomic on Linux and on Windows.
+
+    ``newline=""`` is what the ``csv`` module needs to avoid doubling line
+    endings on Windows.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding=encoding, newline=newline) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass

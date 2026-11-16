@@ -275,6 +275,14 @@ async def promote(store: ImportStore, batch_id: str,
 
     report = await import_contacts(store, payload)
     await store.set_row_status([r["id"] for r in wanted], "imported")
+    # import_contacts writes the contact files; this folds them into the
+    # database too, so the Apollo record holds every contact in the pipeline
+    # rather than only the ones Apollo itself returned.
+    try:
+        from sellbird.fetch import reconcile
+        await reconcile(store)
+    except Exception as exc:  # never fail a finished import over bookkeeping
+        logger.warning("promoted contacts not folded into the record: %s", exc)
     counts = await store.batch_counts(batch_id)
     # Finished when nothing is left that could still be acted on. Rows that
     # were already yours, or that failed, are not work in progress.

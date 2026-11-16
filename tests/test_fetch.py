@@ -281,7 +281,7 @@ def test_cloud_run_refuses_without_a_restored_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(fetch, "make_ledger",
-                        lambda: fetch.FileLedger(tmp_path / "missing.json"))
+                        lambda state=None: fetch.FileLedger(tmp_path / "missing.json"))
     report = asyncio.run(fetch.run_fetch(None, None, segment="mix", credits=5))
     assert report.stopped.startswith("no ledger")
     assert report.credits_used == 0
@@ -297,7 +297,8 @@ def _nocap_setup(monkeypatch, tmp_path, cap, used):
     ledger_path.write_text(json.dumps(
         {"runs": [{"segment": "us_insurance", "credits_used": used, "seen_ids": []}],
          "seen_ids": [], "seen_orgs": [], "skipped_orgs": []}), encoding="utf-8")
-    monkeypatch.setattr(fetch, "make_ledger", lambda: fetch.FileLedger(ledger_path))
+    monkeypatch.setattr(fetch, "make_ledger",
+                        lambda state=None: fetch.FileLedger(ledger_path))
 
     spec = dict(fetch.load_segments(), phase_credit_cap=cap, per_run_credits=10)
     monkeypatch.setattr(fetch, "load_segments", lambda *a, **k: spec)

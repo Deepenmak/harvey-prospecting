@@ -911,8 +911,58 @@ async function loadApollo() {
     '<p class="desc">' + escHtml((s.locations || []).join(', ')) +
     (s.employees && s.employees.length ? ' &middot; ' + escHtml(staffRange(s.employees)) : '') +
     ' &middot; ' + Number(s.titles) + ' titles</p>' +
-    '<p class="desc"><b>' + Number(s.fetched) + '</b> contacts fetched so far</p></div>').join('') +
-    '</div>';
+    '<p class="desc"><b>' + Number(s.fetched) + '</b> contacts fetched so far' +
+    (Number(s.with_email) ? ', ' + Number(s.with_email) + ' with an address' : '') +
+    '</p></div>').join('') + '</div>';
+
+  loadApolloRuns();
+}
+
+// Every run this workspace has made, free searches included. The rows come
+// from the database rather than from exports/plan.csv, which the next plan
+// run replaces.
+async function loadApolloRuns() {
+  const el = document.getElementById('apollo-runs');
+  if (!el) return;
+  const data = await api('/api/apollo/runs?limit=20');
+  const runs = (data && data.runs) || [];
+  if (!runs.length) {
+    el.innerHTML = '<div class="card"><p class="desc">No Apollo runs yet. ' +
+      'Every search, paid or free, is recorded here once you make one.</p></div>';
+    return;
+  }
+  el.innerHTML = '<table class="table"><thead><tr><th>When</th><th>Segment</th>' +
+    '<th>What it did</th><th>Searched</th><th>Contacts</th><th>Credits</th>' +
+    '</tr></thead><tbody>' + runs.map(r =>
+      '<tr><td>' + escHtml(String(r.ran_at || '').slice(0, 16)) + '</td>' +
+      '<td>' + escHtml(r.segment || 'every segment') + '</td>' +
+      '<td>' + escHtml(runMode(r.mode)) + '</td>' +
+      '<td>' + Number(r.searched || 0) + '</td>' +
+      '<td>' + Number(r.contacts || 0) + '</td>' +
+      '<td>' + (Number(r.credits_used) ? '<b>' + Number(r.credits_used) + '</b>'
+                                       : 'free') + '</td></tr>').join('') +
+    '</tbody></table>';
+}
+
+function runMode(mode) {
+  return {fetch: 'Bought addresses', plan: 'Free search',
+          dry: 'Dry run', adopted: 'Brought in from the old files'}[mode] || mode || '';
+}
+
+// Nothing here calls Apollo. It reads the two contact files into the
+// database and writes them again from it, which is both the repair after a
+// redeploy and how judgement written into the CSV becomes durable.
+async function syncApollo() {
+  const out = document.getElementById('apollo-result');
+  if (out) out.innerHTML = '<div class="notice wait">Checking the record. This spends nothing.</div>';
+  const data = await api('/api/apollo/sync', {method: 'POST'});
+  if (out) {
+    out.innerHTML = data && data.success
+      ? '<div class="notice good">' + escHtml(data.message) + '</div>'
+      : '<div class="notice bad">' + escHtml((data && data.message) ||
+          'The record could not be checked.') + '</div>';
+  }
+  loadApollo();
 }
 
 // Apollo writes a headcount band as "200,5000". Say it the way a person would.
@@ -926,11 +976,19 @@ function renderApolloLedger(data) {
   if (!el) return;
   const cap = Number(data.phase_credit_cap) || 0;
   el.innerHTML = '<div class="inbox-summary">' +
+    '<span><b>' + Number(data.stored_contacts || 0) + '</b> contacts kept' +
+    (Number(data.stored_with_email) ? ', ' + Number(data.stored_with_email) +
+      ' with an address' : '') + '</span>' +
     '<span><b>' + Number(data.credits_used) + '</b> credits spent, all time' +
     (cap ? ' of <b>' + cap + '</b>' : '') + '</span>' +
     '<span><b>' + Number(data.credits_today) + '</b> today</span>' +
     '<span><b>' + Number(data.people_seen) + '</b> people seen, never bought twice</span>' +
     '<span>' + (data.key_set ? 'Key set' : '<b>No API key yet</b>') + '</span></div>' +
+    '<p class="desc">Every contact and every credit above is kept in the database on ' +
+      'the data volume, not in the export files, so a redeploy keeps all of it. ' +
+      'The CSVs in exports/ are written from it after every run.</p>' +
+    (data.repaired ? '<div class="notice good">The export files were missing rows the ' +
+      'database had. They have been written again.</div>' : '') +
     (data.key_set ? '' : '<div class="notice bad">Apollo has no API key here. ' +
       'Add it on the Settings tab before searching.</div>');
 }

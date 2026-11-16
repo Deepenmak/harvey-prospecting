@@ -45,6 +45,14 @@ def _store() -> ImportStore:
     return ImportStore(db_path=str(dashboard.DB_PATH))
 
 
+def _apollo_store():
+    """The Apollo record: runs, contacts and the ledger, in this workspace's
+    database rather than in exports/ and data/fetch_ledger.json."""
+    from sellbird import dashboard
+    from sellbird.apollo_store import ApolloStore
+    return ApolloStore(db_path=str(dashboard.DB_PATH))
+
+
 def _brain(store):
     """The brain, when there is one. An import works without it."""
     try:
@@ -275,29 +283,39 @@ async def apollo_operations():
 
 @router.get("/api/apollo/segments")
 async def apollo_segments():
-    """Who Apollo is asked about: the segments in segments.yaml, with what
-    the ledger says has been spent so far."""
-    from sellbird.fetch import LOCAL_LEDGER, load_segments
+    """Who Apollo is asked about, and what the record says has been spent.
+
+    The record is the database, not data/fetch_ledger.json. That is the
+    point of it: the database sits on the mounted volume and is carried
+    through a redeploy, so every contact and every credit a past run spent
+    is still here afterwards. Anything an older install left in the file or
+    in exports/ is adopted the first time this is read, and if the files
+    have gone thin while the database has not, they are rebuilt here.
+    """
+    from sellbird import fetch as fetch_module
 
     try:
-        spec = load_segments()
+        spec = fetch_module.load_segments()
     except Exception as e:
         return JSONResponse({"error": f"segments.yaml could not be read: {e}"},
                             status_code=500)
-    ledger = {}
-    if LOCAL_LEDGER.exists():
-        try:
-            ledger = json.loads(LOCAL_LEDGER.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            ledger = {}
-    runs = ledger.get("runs") or []
+    apollo = _apollo_store()
+    await apollo.init_db()
+    repaired: dict = {}
+    try:
+        if not await fetch_module.exports_in_sync(apollo):
+            repaired = await fetch_module.reconcile(apollo)
+    except Exception as e:  # a tab must still open
+        logger.warning("Apollo record not reconciled: %s", e)
+    summary = await apollo.summary()
+    per_segment = await apollo.segment_counts()
     segments = [{
         "key": s.get("key", ""), "label": s.get("label", ""),
         "locations": s.get("locations") or [],
         "titles": len(s.get("titles") or []),
         "employees": s.get("employees") or [],
-        "fetched": sum(int(r.get("prospects") or 0) for r in runs
-                       if r.get("segment") == s.get("key")),
+        "fetched": per_segment.get(s.get("key", ""), {}).get("contacts", 0),
+        "with_email": per_segment.get(s.get("key", ""), {}).get("with_email", 0),
     } for s in spec.get("segments") or []]
     store = _store()
     await store.init_db()
@@ -305,11 +323,58 @@ async def apollo_segments():
         "segments": segments,
         "per_run_credits": int(spec.get("per_run_credits", 10) or 10),
         "phase_credit_cap": int(spec.get("phase_credit_cap", 0) or 0),
-        "credits_used": sum(int(r.get("credits_used") or 0) for r in runs),
-        "people_seen": len(ledger.get("seen_ids") or []),
+        "credits_used": summary["credits_used"],
+        "people_seen": summary["people_seen"],
+        "companies_seen": summary["companies_seen"],
+        "stored_contacts": summary["contacts"],
+        "stored_with_email": summary["with_email"],
+        "runs": summary["runs"],
+        "repaired": bool(repaired),
         "credits_today": await import_service._spent_today(store),
         "key_set": bool(_apollo_key()),
     }
+
+
+@router.get("/api/apollo/runs")
+async def apollo_runs(limit: int = 25):
+    """Every Apollo run this workspace has made, newest first.
+
+    Free searches are in here too. exports/plan.csv is replaced by the next
+    plan run, so without this row there would be no record that the search
+    ever happened.
+    """
+    apollo = _apollo_store()
+    await apollo.init_db()
+    return {"runs": await apollo.runs(limit), "summary": await apollo.summary()}
+
+
+@router.post("/api/apollo/sync")
+async def apollo_sync():
+    """Make the database and the two contact files agree, now.
+
+    Nothing here calls Apollo and nothing costs a credit. It reads whatever
+    the files hold into the database and writes the files again from it, so
+    it is both the repair after a redeploy and the way judgement a skill
+    wrote into contacts_all.csv becomes durable.
+    """
+    from sellbird.fetch import reconcile
+
+    apollo = _apollo_store()
+    await apollo.init_db()
+    try:
+        result = await reconcile(apollo)
+    except Exception as e:
+        logger.exception("Apollo sync failed")
+        return _refuse(f"Could not sync the Apollo record: {e}", 500)
+    adopted = result.get("adopted") or {}
+    added = int(adopted.get("contacts") or 0)
+    return {"success": True, "stored": result.get("stored", 0),
+            "files": result.get("files", 0),
+            "credits_used": result.get("credits_used", 0),
+            "message": (f"{result.get('stored', 0)} contacts are in the database "
+                        f"and in both files"
+                        + (f"; {added} read in from exports" if added else "")
+                        + ". Nothing was spent.")}
 
 
 def _apollo_key() -> str:

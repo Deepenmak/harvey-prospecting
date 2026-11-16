@@ -32,6 +32,7 @@ and data/fetch_ledger.json otherwise.
 """
 
 import csv
+import io
 import json
 import logging
 import math
@@ -48,7 +49,7 @@ from sellbird.collectors.ats import Posting, matching_roles, role_keywords
 from sellbird.integrations.apollo import ApolloClient, apollo_key
 from sellbird.models.company import Company
 from sellbird.models.prospect import Prospect
-from sellbird.paths import PROJECT_ROOT
+from sellbird.paths import PROJECT_ROOT, write_atomic
 
 logger = logging.getLogger("sellbird.fetch")
 
@@ -321,7 +322,8 @@ def account_tier(row: dict) -> str:
                    and get("verified") in ("pass", "partial")) else ""
 
 
-def read_contacts(path: Path = CONTACTS_FILE) -> list[dict]:
+def read_contacts(path: Path | None = None) -> list[dict]:
+    path = CONTACTS_FILE if path is None else path
     if not path.exists():
         return []
     with open(path, newline="", encoding="utf-8") as f:
@@ -345,24 +347,31 @@ def merge_contacts(existing: list[dict], updates: list[dict],
     return sorted(by_id.values(), key=contact_rank)
 
 
-def save_contacts(rows: list[dict], path: Path = CONTACTS_FILE,
-                  email_path: Path = EMAIL_CONTACTS_FILE):
+def save_contacts(rows: list[dict], path: Path | None = None,
+                  email_path: Path | None = None):
     """Write every contact, and the ones with an email, best first."""
+    path = CONTACTS_FILE if path is None else path
+    email_path = EMAIL_CONTACTS_FILE if email_path is None else email_path
     rows = sorted(({**r, "account_tier": account_tier(r)} for r in rows),
                   key=contact_rank)
     path.parent.mkdir(parents=True, exist_ok=True)
     for target, subset in ((path, rows), (email_path, [r for r in rows if r.get("email")])):
-        with open(target, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=CONTACT_COLUMNS, extrasaction="ignore")
-            w.writeheader()
-            w.writerows(subset)
+        # Whole file or none of it: a container stopped mid-write used to
+        # leave a truncated contacts file, which is lost contacts.
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=CONTACT_COLUMNS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(subset)
+        write_atomic(target, buf.getvalue(), newline="")
 
 
 def update_contacts(updates: list[dict], add_new: bool = False,
-                    path: Path = CONTACTS_FILE,
-                    email_path: Path = EMAIL_CONTACTS_FILE) -> int:
+                    path: Path | None = None,
+                    email_path: Path | None = None) -> int:
     """Fold judgement (fit, research, fact check, drafts) into the contact
     files. Returns how many stored contacts the updates matched."""
+    path = CONTACTS_FILE if path is None else path
+    email_path = EMAIL_CONTACTS_FILE if email_path is None else email_path
     existing = read_contacts(path)
     known = {r["apollo_id"] for r in existing}
     save_contacts(merge_contacts(existing, updates, add_new), path, email_path)
@@ -381,10 +390,16 @@ class LedgerState:
 
 
 class FileLedger:
-    """Local fallback when no sheet is configured."""
+    """The JSON mirror. No longer the record -- see DbLedger."""
 
-    def __init__(self, path: Path = LOCAL_LEDGER):
-        self.path = path
+    name = "file"
+    is_local = True
+
+    def __init__(self, path: Path | None = None):
+        self.path = LOCAL_LEDGER if path is None else path
+
+    async def has_history(self) -> bool:
+        return self.path.exists()
 
     def _read(self) -> dict:
         if self.path.exists():
@@ -407,8 +422,7 @@ class FileLedger:
                                 | {r["company"].lower() for r in rows if r["company"]})
         d["skipped_orgs"] = sorted(set(d.get("skipped_orgs", []))
                                    | set(run.get("skipped_orgs", [])))
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(d, indent=2), encoding="utf-8")
+        write_atomic(self.path, json.dumps(d, indent=2))
 
     async def push_angles(self, angles: dict[str, str]):
         pass  # the CSV is the record locally
@@ -417,8 +431,14 @@ class FileLedger:
 class SheetLedger:
     """Google Sheet via its Apps Script web app (scripts/sheet_webhook.gs)."""
 
+    name = "sheet"
+    is_local = False
+
     def __init__(self, url: str, token: str):
         self.url, self.token = url, token
+
+    async def has_history(self) -> bool:
+        return True
 
     async def _call(self, body: dict) -> dict:
         # The token rides in the POST body only, never the URL, so it can't
@@ -457,11 +477,221 @@ class SheetLedger:
         await self._call({"angles": angles})
 
 
-def make_ledger():
+class DbLedger:
+    """The database is the record. A file or a sheet is kept as a mirror.
+
+    Everything that matters -- which Apollo people have been paid for, which
+    companies are spoken for, how many credits have gone -- lives in
+    data/sellbird.db under SELLBIRD_HOME, which is the mounted volume. A
+    redeploy replaces the image and keeps the volume, so the record survives
+    it. The JSON file and the Google Sheet are still written, because the
+    lead-gen skills and the cloud runs read them, but losing either of them
+    now costs nothing: sync_exports rebuilds the files from the database.
+
+    load() adopts first. An install that fetched before these tables existed
+    has its whole history in the file and the CSV, so that history is read
+    into the database once, credits included, rather than restarting the cap
+    at zero.
+    """
+
+    def __init__(self, state, mirror=None):
+        from sellbird.apollo_store import ApolloStore
+        self.store = ApolloStore(getattr(state, "db_path", "") or None)
+        self.mirror = mirror
+        self.is_local = bool(getattr(mirror, "is_local", True))
+
+    @property
+    def name(self) -> str:
+        return "database+" + (getattr(self.mirror, "name", "") or "none")
+
+    async def has_history(self) -> bool:
+        if await self.store.run_count() or await self.store.contact_count():
+            return True
+        if self.mirror is None:
+            return False
+        try:
+            return await self.mirror.has_history()
+        except Exception:
+            return False
+
+    def _sources(self) -> list:
+        """Every ledger worth reading on the way in.
+
+        A sheet and a local file can each hold history the other does not --
+        the sheet from a cloud run, the file from a laptop that never had the
+        webhook -- and adoption is a union, so read both. Reading one of them
+        and not the other is how credits already spent came back as zero.
+        """
+        sources = [self.mirror] if self.mirror is not None else []
+        if not any(isinstance(m, FileLedger) for m in sources):
+            local = FileLedger()
+            if local.path.exists():
+                sources.append(local)
+        return sources
+
+    async def _mirror_state(self):
+        """The union of what every mirror knows, or None if none answered."""
+        found = None
+        for source in self._sources():
+            try:
+                state = await source.load()
+            except Exception as exc:
+                logger.warning("ledger mirror (%s) unreadable, carrying on "
+                               "with the database: %s",
+                               getattr(source, "name", "?"), exc)
+                continue
+            if found is None:
+                found = state
+                continue
+            found.seen_ids |= state.seen_ids
+            found.seen_orgs |= state.seen_orgs
+            # Mirrors of the same spend, not separate spends: the fuller one
+            # wins. Adding them up would invent credits nobody used.
+            found.credits_used = max(found.credits_used, state.credits_used)
+            found.last_segment = found.last_segment or state.last_segment
+        return found
+
+    async def adopt(self) -> dict:
+        """Pull anything the database does not have yet out of the mirrors."""
+        await self.store.init_db()
+        before = await self.store.seen_count()
+        before_contacts = await self.store.contact_count()
+        fresh = await self.store.run_count() == 0
+        mirror = await self._mirror_state()
+        if mirror is not None:
+            await self.store.mark_seen("person", mirror.seen_ids)
+            await self.store.mark_seen("org", mirror.seen_orgs)
+        rows = read_contacts(CONTACTS_FILE)
+        if rows:
+            await self.store.upsert_contacts("", rows)
+            await self.store.mark_seen("person", [r.get("apollo_id") for r in rows])
+            await self.store.mark_seen("org", [r.get("company") for r in rows])
+        contacts = await self.store.contact_count() - before_contacts
+        credits = 0
+        if fresh and mirror is not None and mirror.credits_used:
+            # Carry the spend over as one run, or the phase cap would start
+            # again from zero and buy a second copy of the same phase.
+            credits = mirror.credits_used
+            await self.store.record_run({
+                "segment": mirror.last_segment, "mode": "adopted",
+                "credits_used": credits, "contacts": len(rows),
+                "ledger": getattr(self.mirror, "name", "")})
+        adopted = {"contacts": contacts, "credits": credits,
+                   "seen": await self.store.seen_count() - before}
+        if any(adopted.values()):
+            logger.info("apollo ledger adopted into the database: %s", adopted)
+        return adopted
+
+    async def load(self) -> LedgerState:
+        await self.adopt()
+        people, orgs = await self.store.seen()
+        return LedgerState(seen_ids=people, seen_orgs=orgs,
+                           credits_used=await self.store.credits_used(),
+                           last_segment=await self.store.last_segment())
+
+    async def record(self, run: dict, rows: list[dict]) -> str:
+        """Database first, then the files, then whatever mirror is configured.
+
+        The order is the point: by the time anything can fail, the run and
+        its contacts are committed. A mirror that is down is logged and
+        carried on from, because the record is already safe.
+        """
+        run_id = await self.store.record_run(run)
+        await self.store.upsert_contacts(run_id, rows)
+        await self.store.mark_seen("person", run.get("seen_ids") or [],
+                                   "fetched", run_id)
+        await self.store.mark_seen("org", [r.get("company") for r in rows],
+                                   "fetched", run_id)
+        await self.store.mark_seen("org", run.get("skipped_orgs") or [],
+                                   "skipped", run_id)
+        try:
+            await sync_exports(self.store)
+        except OSError as exc:
+            logger.warning("contact files not rewritten (the database has the "
+                           "run): %s", exc)
+        if self.mirror is not None:
+            try:
+                await self.mirror.record(run, rows)
+            except Exception as exc:
+                logger.warning("ledger mirror not updated (the database has "
+                               "the run): %s", exc)
+        return run_id
+
+    async def push_angles(self, angles: dict) -> None:
+        if self.mirror is not None:
+            await self.mirror.push_angles(angles)
+
+
+def make_mirror():
+    """The external ledger, if one is configured: a sheet, else the JSON file."""
     url = (os.getenv("SHEET_WEBHOOK_URL") or "").strip()
     if url:
         return SheetLedger(url, (os.getenv("SHEET_TOKEN") or "").strip())
     return FileLedger()
+
+
+def make_ledger(state=None):
+    """The ledger to use: with a database (always, outside tests) the
+    DbLedger wrapping the mirror, and without one the mirror alone."""
+    mirror = make_mirror()
+    return DbLedger(state, mirror) if state is not None else mirror
+
+
+async def exports_in_sync(store, path: Path | None = None) -> bool:
+    """Whether the contact files still hold everything the database does.
+
+    A count, not a diff, and deliberately so: the failure this guards
+    against is the files being gone or thinner than the record -- a fresh
+    volume, a deleted exports/, a write that did not finish. A full
+    reconcile runs after every fetch anyway, so this only has to decide
+    whether to repair now.
+    """
+    stored = await store.contact_count()
+    if not stored:
+        return True
+    return len(read_contacts(CONTACTS_FILE if path is None else path)) >= stored
+
+
+async def reconcile(state) -> dict:
+    """Bring the database and the contact files back into agreement.
+
+    Safe to call at any time, from anywhere, as often as you like: adopting
+    is INSERT OR IGNORE and the merge never erases a non-empty value. This
+    is what makes a redeploy a non-event. It is also the repair: if the
+    database has contacts and exports/ came back empty, this writes the
+    files again; if an older install has files and no rows, this reads them
+    in, credits included.
+    """
+    ledger = make_ledger(state)
+    if not isinstance(ledger, DbLedger):
+        return {"stored": 0, "adopted": {}, "files": 0}
+    adopted = await ledger.adopt()
+    files = await sync_exports(ledger.store)
+    return {"adopted": adopted, "files": files,
+            "stored": await ledger.store.contact_count(),
+            "credits_used": await ledger.store.credits_used()}
+
+
+async def sync_exports(store, path: Path | None = None,
+                       email_path: Path | None = None) -> int:
+    """Make the database and the two contact files agree.
+
+    The database holds what Apollo returned. The files can hold more: the
+    lead-gen skills write their judgement straight into contacts_all.csv
+    through update_contacts(). So the merge runs file-on-top-of-database and
+    the result goes to both, and neither side loses what the other knows. A
+    file that was deleted, or came back empty on a fresh volume, is rebuilt
+    from the database by the same call.
+    """
+    path = CONTACTS_FILE if path is None else path
+    email_path = EMAIL_CONTACTS_FILE if email_path is None else email_path
+    merged = merge_contacts(await store.contacts(), read_contacts(path),
+                            add_new=True)
+    if not merged:
+        return 0
+    save_contacts(merged, path, email_path)
+    await store.upsert_contacts("", merged)
+    return len(merged)
 
 
 # ── The run ──────────────────────────────────────────────────────────
@@ -479,6 +709,7 @@ class FetchReport:
     rows: list[dict] = field(default_factory=list)
     csv_path: str = ""
     ledger: str = ""
+    run_id: str = ""
     stopped: str = ""
 
     def as_dict(self) -> dict:
@@ -579,20 +810,21 @@ async def _search(apollo, seg: dict, led: LedgerState, limit: int) -> tuple[list
 
 
 def write_plan(groups: list[list[dict]], path: Path):
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=PLAN_COLUMNS)
-        w.writeheader()
-        for group in groups:
-            for p in group:
-                org = p.get("organization") or {}
-                w.writerow({"segment": p["_segment"], "apollo_id": p["id"],
-                            "first_name": p.get("first_name", ""),
-                            "title": p.get("title", ""),
-                            "company": org.get("name", ""),
-                            "employees": org.get("estimated_num_employees") or "",
-                            "industry": org.get("industry") or "",
-                            "website": org.get("website_url") or org.get("primary_domain") or "",
-                            "title_rank": p["_rank"], "verdict": "", "reason": ""})
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=PLAN_COLUMNS)
+    w.writeheader()
+    for group in groups:
+        for p in group:
+            org = p.get("organization") or {}
+            w.writerow({"segment": p["_segment"], "apollo_id": p["id"],
+                        "first_name": p.get("first_name", ""),
+                        "title": p.get("title", ""),
+                        "company": org.get("name", ""),
+                        "employees": org.get("estimated_num_employees") or "",
+                        "industry": org.get("industry") or "",
+                        "website": org.get("website_url") or org.get("primary_domain") or "",
+                        "title_rank": p["_rank"], "verdict": "", "reason": ""})
+    write_atomic(path, buf.getvalue(), newline="")
 
 
 async def run_fetch(state, config, segment: str = "auto", credits: int | None = None,
@@ -602,15 +834,19 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     ``mix`` (all of them, credits shared in turn). ``plan`` writes candidates
     for review and spends nothing; ``from_plan`` enriches a reviewed plan."""
     spec = load_segments()
-    ledger = make_ledger()
-    if isinstance(ledger, FileLedger) and os.getenv("GITHUB_ACTIONS"):
-        # A CI checkout is fresh every run: a local ledger would forget what
-        # was spent and fetched, so the credit cap would mean nothing.
+    ledger = make_ledger(state)
+    # What matters is whether this workspace has a record of its own past
+    # runs, not which class is holding it. A mounted database counts; a
+    # checkout that has never fetched does not.
+    local_and_blank = ledger.is_local and not await ledger.has_history()
+    if local_and_blank and os.getenv("GITHUB_ACTIONS"):
+        # A CI checkout is fresh every run: with nothing to go on, the credit
+        # cap would mean nothing and already-bought people would be bought
+        # again.
         return FetchReport(segment=segment, ledger="none",
-                           stopped="SHEET_WEBHOOK_URL is not set; refusing to "
-                                   "spend credits without the sheet ledger")
-    if (isinstance(ledger, FileLedger) and os.getenv("CLAUDE_CODE_REMOTE")
-            and not ledger.path.exists()):
+                           stopped="no ledger history here and SHEET_WEBHOOK_URL "
+                                   "is not set; refusing to spend credits blind")
+    if local_and_blank and os.getenv("CLAUDE_CODE_REMOTE"):
         # A Claude cloud run starts from a fresh clone too, but it can bring
         # the ledger back from the leads dashboard before fetching.
         return FetchReport(segment=segment, ledger="none",
@@ -629,7 +865,7 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
         budget = min(budget, left)
 
     report = FetchReport(segment="mix" if len(segs) > 1 else segs[0]["key"],
-                         credits_left=left, cap=cap, ledger=type(ledger).__name__)
+                         credits_left=left, cap=cap, ledger=ledger.name)
     if budget <= 0:
         report.stopped = (f"credit cap reached ({led.credits_used}/{cap} used)"
                           if cap > 0 else "budget for this run is 0 credits")
@@ -676,11 +912,13 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
             report.rows = [{"segment": p["_segment"], "title": p.get("title", ""),
                             "company": p["organization"]["name"]}
                            for g in groups for p in g]
+            report.run_id = await record_search(ledger, report, "plan")
             return report
         if dry_run:
             report.rows = [{"segment": p["_segment"], "first_name": p.get("first_name", ""),
                             "title": p.get("title", ""),
                             "company": p["organization"]["name"]} for p in picks[:budget]]
+            report.run_id = await record_search(ledger, report, "dry")
             return report
 
         enriched: list[tuple[dict, dict]] = []
@@ -770,16 +1008,40 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     rows.sort(key=lambda r: r["score"], reverse=True)
     report.rows = rows
 
-    save_contacts(merge_contacts(read_contacts(), rows))
-    report.csv_path = str(CONTACTS_FILE)
-
-    run = {"ran_at": now, "segment": report.segment, "searched": report.searched,
+    run = {"ran_at": now, "segment": report.segment, "mode": "fetch",
+           "searched": report.searched, "candidates": report.candidates,
            "enriched": report.enriched, "credits_used": report.credits_used,
            "prospects": len(rows), "seen_ids": seen_now,
-           "skipped_orgs": sorted(set(skipped))}
-    await ledger.record(run, rows)
+           "skipped_orgs": sorted(set(skipped)), "ledger": ledger.name}
+    # DbLedger.record commits the run and the contacts, then rewrites the two
+    # contact files from the database. Without a database the files are the
+    # only record there is, so they are written here instead.
+    recorded = await ledger.record(run, rows)
+    report.run_id = recorded if isinstance(recorded, str) else ""
+    if not isinstance(ledger, DbLedger):
+        save_contacts(merge_contacts(read_contacts(), rows))
+    report.csv_path = str(CONTACTS_FILE)
     report.credits_left = left - report.credits_used
     return report
+
+
+async def record_search(ledger, report: FetchReport, mode: str) -> str:
+    """Note a search that spent nothing: a plan, or a dry run.
+
+    It costs no credits, but "what did the last search actually find" has to
+    outlive exports/plan.csv, which the next plan run replaces.
+    """
+    store = getattr(ledger, "store", None)
+    if store is None:
+        return ""
+    try:
+        return await store.record_run({
+            "segment": report.segment, "mode": mode,
+            "searched": report.searched, "candidates": report.candidates,
+            "contacts": len(report.rows), "ledger": ledger.name})
+    except Exception as exc:
+        logger.warning("free search not recorded: %s", exc)
+        return ""
 
 
 async def push_angles(csv_path: str = str(CONTACTS_FILE)) -> tuple[int, bool]:
