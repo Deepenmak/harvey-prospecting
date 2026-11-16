@@ -1126,6 +1126,18 @@ a.btn, a.btn:hover { text-decoration: none; }
 .inbox-help .inset p { font-size: var(--fs-caption); color: var(--text-2); line-height: 1.55; }
 @media (max-width: 860px) { .inbox-help { grid-template-columns: minmax(0, 1fr); } }
 
+/* Where an imported list has got to: staged, bought, in the pipeline. Only
+   the last step puts anything in Companies or Contacts, so the three are
+   shown together rather than left to be inferred from a table of rows. */
+.import-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3); margin: var(--sp-4) 0; }
+.import-steps .inset h4 { display: flex; align-items: center; gap: 6px;
+  font-size: var(--fs-ui); font-weight: 600; margin-bottom: 4px; }
+.import-steps .inset h4 .icon { width: 15px; height: 15px; color: var(--good); }
+.import-steps .inset.muted { opacity: 0.55; }
+.import-steps .inset p { font-size: var(--fs-caption); color: var(--text-2); }
+@media (max-width: 860px) { .import-steps { grid-template-columns: minmax(0, 1fr); } }
+
 dialog.modal {
   margin: auto; inset: 0;
   width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0;

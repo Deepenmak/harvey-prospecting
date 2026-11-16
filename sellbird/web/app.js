@@ -1573,6 +1573,7 @@ async function loadImportBatch(id) {
       '<div class="inset"><div class="k">Already yours</div><div class="v">' + Number(c.duplicate || 0) + '</div></div>' +
       '<div class="inset"><div class="k">Credits spent</div><div class="v">' + Number(b.credits_spent || 0) + '</div></div>' +
     '</div>' +
+    importSteps(b, c) +
     (a.pending ? '<p class="desc">Claude is reading the file now. What you see is Sellbird\'s own reading of it.</p>'
       : a.by === 'claude' ? '<p class="desc">Read by Claude.</p>'
       : '<p class="desc">Read by Sellbird itself.</p>') +
@@ -1612,6 +1613,15 @@ async function loadImportBatch(id) {
 
   html += mappingCard(b);
   html += importRowsTable(data.rows || []);
+  const ready = Number(c.enriched || 0) +
+    (data.rows || []).filter(r => r.status === 'staged' && r.email).length;
+  if (ready) {
+    html += '<div class="card"><div class="card-title">Ready to go into the pipeline</div>' +
+      '<p>' + ready + ' of these are usable contacts. Until you add them, they are not in ' +
+      'Companies, Contacts or any campaign: a staged row is a candidate, not a contact.</p>' +
+      '<div class="btn-group"><button class="btn btn-primary" onclick="promoteImport()">Add ' +
+      ready + ' contact' + (ready === 1 ? '' : 's') + ' to the pipeline</button></div></div>';
+  }
   html += '<div class="card"><div class="btn-group">' +
     '<button class="btn btn-ghost btn-sm" onclick="discardImport()">Discard this list</button>' +
     '<button class="btn btn-ghost btn-sm" onclick="deleteImport()">Delete it</button></div></div>';
@@ -1626,6 +1636,27 @@ async function loadImportBatch(id) {
   if (a.pending && _importBatch === id) setTimeout(() => {
     if (_importBatch === id) loadImportBatch(id);
   }, 3000);
+}
+
+// Where this list has got to. Three steps, and only the last one puts
+// anything in Companies or Contacts — which is not obvious from a page full
+// of rows that look like contacts already.
+function importSteps(batch, counts) {
+  const staged = Number(counts.staged || 0) + Number(counts.duplicate || 0);
+  const bought = Number(counts.enriched || 0);
+  const inPipeline = Number(counts.imported || 0);
+  const steps = [
+    ['Staged', staged + ' waiting', 'free', staged > 0],
+    ['Addresses bought', bought ? bought + ' enriched' : 'none yet',
+     Number(batch.credits_spent || 0) + ' credits', bought > 0],
+    ['In the pipeline', inPipeline ? inPipeline + ' contacts' : 'none yet',
+     'Companies and Contacts', inPipeline > 0],
+  ];
+  return '<div class="import-steps">' + steps.map(([title, detail, note, done], i) =>
+    '<div class="inset' + (done ? '' : ' muted') + '">' +
+      '<h4>' + (i + 1) + '. ' + title + (done ? ' ' + icon('check') : '') + '</h4>' +
+      '<p class="desc">' + escHtml(detail) + ' &middot; ' + escHtml(note) + '</p></div>').join('') +
+    '</div>';
 }
 
 function mappingCard(b) {
