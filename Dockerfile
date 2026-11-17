@@ -58,7 +58,13 @@ RUN pip install --no-cache-dir --no-deps -e .
 # into it or pushed to the public repo. start.sh seeds this folder on first
 # boot from the template files in /app.
 ENV SELLBIRD_HOME=/config
-RUN mkdir -p /config/data /config/exports /config/skills /config/prompts
+# Claude's login goes on the volume too. Without this it lands in $HOME
+# (/root), which is part of the image layer, so every redeploy signed
+# Sellbird out again -- quietly: the loop kept running and reading websites,
+# and only the writing stopped. Sellbird reads this variable for the quota
+# gauge and passes it to every CLI call (sellbird/usage.py, claude_runtime).
+ENV CLAUDE_CONFIG_DIR=/config/.claude
+RUN mkdir -p /config/data /config/exports /config/skills /config/prompts /config/.claude
 VOLUME ["/config"]
 
 EXPOSE 5555

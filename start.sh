@@ -19,6 +19,17 @@ SEED="/app"
 echo "[sellbird] Home (persistent volume): $HOME_DIR"
 mkdir -p "$HOME_DIR/data" "$HOME_DIR/exports" "$HOME_DIR/skills" "$HOME_DIR/prompts"
 
+# Claude's login lives on the volume (CLAUDE_CONFIG_DIR), so signing in
+# once survives a redeploy. It holds credentials: nobody else may read it.
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME_DIR/.claude}"
+mkdir -p "$CLAUDE_DIR"
+chmod 700 "$CLAUDE_DIR" 2>/dev/null || true
+if [ ! -f "$CLAUDE_DIR/.credentials.json" ]; then
+  echo "[sellbird] Claude is not signed in yet. Open a terminal here and run:"
+  echo "[sellbird]   claude login"
+  echo "[sellbird] It is kept in $CLAUDE_DIR on the volume, so you only do this once."
+fi
+
 # Seed the volume from the image on first boot. Existing files are NEVER
 # overwritten, so everything configured through the UI survives a redeploy.
 [ -f "$HOME_DIR/sellbird.yaml" ] || cp "$SEED/sellbird.yaml" "$HOME_DIR/sellbird.yaml"
