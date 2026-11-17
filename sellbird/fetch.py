@@ -928,6 +928,11 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
                 break
             person = await apollo.enrich(p["id"])
             seen_now.append(p["id"])
+            # Recorded now, not at the end of the run. A container stopped
+            # between the credit leaving and ledger.record() used to lose
+            # every id it had already paid for, and the next run bought the
+            # same people over again.
+            await mark_spoken_for(ledger, p["id"], "fetched" if person else "missed")
             if person is None:
                 continue
             # Charged when Apollo returns data: count it, conservatively.
@@ -1023,6 +1028,27 @@ async def run_fetch(state, config, segment: str = "auto", credits: int | None = 
     report.csv_path = str(CONTACTS_FILE)
     report.credits_left = left - report.credits_used
     return report
+
+
+async def mark_spoken_for(ledger, apollo_id: str, reason: str) -> None:
+    """Note one person the moment Apollo has answered for them.
+
+    ``fetched`` means a credit went; ``missed`` means Apollo had nobody and
+    charged nothing. Both stop a later search offering them again, and only
+    ``fetched`` counts as "we already own this" when a staged list is
+    checked for duplicates.
+
+    Best effort on purpose: a bookkeeping write must never lose a person
+    Apollo has already been paid for, so a failure here is logged and the
+    run carries on to ledger.record(), which writes the whole set again.
+    """
+    store = getattr(ledger, "store", None)
+    if store is None or not apollo_id:
+        return
+    try:
+        await store.mark_seen("person", [apollo_id], reason)
+    except Exception as exc:
+        logger.warning("could not record %s as %s: %s", apollo_id, reason, exc)
 
 
 async def record_search(ledger, report: FetchReport, mode: str) -> str:

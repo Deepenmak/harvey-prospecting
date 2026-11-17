@@ -186,9 +186,15 @@ async def estimate(store: ImportStore, batch_id: str, op_key: str,
         raise StagingError(f"{op_key!r} is not an Apollo operation")
     rows = await _targets(store, batch_id, row_ids, op.key)
     eligible = op.eligible(rows)
+    units = op.charge_units(rows)
     return {"op": op.key, "label": op.label, "rows": len(eligible),
             "skipped": len(rows) - len(eligible),
-            "credits": len(eligible) * op.credits_per_unit,
+            # What is charged, which is not always the number of rows: a
+            # company record is one credit however many of its people are on
+            # the list.
+            "charged": len(units), "unit": op.unit,
+            "shared": len(eligible) - len(units),
+            "credits": len(units) * op.credits_per_unit,
             "free": op.credits_per_unit == 0,
             "needs": op._needs_text()}
 
@@ -205,6 +211,9 @@ async def enrich(store: ImportStore, batch_id: str, op_key: str,
     op = apollo_ops.OPS.get(op_key)
     if op is None:
         raise StagingError(f"{op_key!r} is not an Apollo operation")
+    if not apollo_ops.runnable(op.key):
+        raise StagingError(f"{op.label} is not wired up in this fork yet, so "
+                           "there is nothing to approve")
     rows = await _targets(store, batch_id, row_ids, op.key)
     if op.credits_per_unit and max_credits <= 0:
         raise StagingError("approve a credit cap before enriching")

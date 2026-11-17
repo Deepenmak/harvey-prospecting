@@ -124,10 +124,32 @@ def test_a_candidate_already_in_the_pipeline_is_not_bought_again(
     plan_run(workspace, monkeypatch)
     again = asyncio.run(import_service.stage_from_apollo(store, None, "us_insurance", 25))
     staged = asyncio.run(store.get_rows(again["batch_id"]))
-    assert any(r["status"] == "duplicate" for r in staged) is False, \
-        "a candidate with no address cannot be matched to a known contact yet"
-    # ...but the apollo id dedups inside one batch.
+
+    # A candidate has no address yet, by design, so its Apollo person id is
+    # the only identity it has. Checking the address alone used to let a
+    # candidate already paid for be staged, priced and bought a second time.
+    bought = next(r for r in staged if r["apollo_id"] == rows[0]["apollo_id"])
+    assert bought["status"] == "duplicate"
+    # The one nobody bought is still work to do.
+    assert any(r["status"] == "staged" for r in staged)
+    # And the apollo id dedups inside one batch too.
     assert len({r["apollo_id"] for r in staged}) == len(staged)
+
+
+def test_a_duplicate_candidate_is_priced_at_nothing(store, workspace, monkeypatch):
+    """The point of marking it: it must not appear in the bill."""
+    plan_run(workspace, monkeypatch)
+    first = asyncio.run(import_service.stage_from_apollo(store, None, "us_insurance", 25))
+    rows = asyncio.run(store.get_rows(first["batch_id"]))
+    asyncio.run(store.update_row(rows[0]["id"], email="a1@example.com"))
+    asyncio.run(import_service.promote(store, first["batch_id"]))
+
+    plan_run(workspace, monkeypatch)
+    again = asyncio.run(import_service.stage_from_apollo(store, None, "us_insurance", 25))
+    quote = asyncio.run(import_service.estimate(store, again["batch_id"],
+                                                "people_enrich_id"))
+    assert quote["credits"] == 1, "only the candidate nobody owns yet costs"
+    assert quote["rows"] == 1
 
 
 def test_a_search_that_finds_nothing_says_so(store, workspace, monkeypatch):

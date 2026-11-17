@@ -68,11 +68,14 @@ def _ops_text() -> str:
     lines = []
     for key in apollo_ops.MENU_ORDER:
         op = apollo_ops.OPS[key]
-        price = ("free" if op.credits_per_unit == 0
+        price = ("nothing" if op.credits_per_unit == 0
                  else f"{op.credits_per_unit} credit"
                       f"{'s' if op.credits_per_unit > 1 else ''} per {op.unit}")
+        note = (f" Charged once per {op.unit}, however many rows share it."
+                if op.charges_per == "group" else "")
         lines.append(f"- `{op.key}` — {op.label}. Needs {op._needs_text()}. "
-                     f"Costs {price}. Gives {op.gives.lower()}.")
+                     f"Costs {price}.{note} Gives {op.gives.lower()}. "
+                     f"Writes {', '.join(op.produces) or 'nothing of its own'}.")
     return "\n".join(lines)
 
 
@@ -104,8 +107,16 @@ def _clean_recommended(value, rows: list[dict]) -> list[dict]:
         if op is None or op.danger:
             continue
         eligible = op.eligible(rows)
+        if not eligible:
+            # Recommending an operation with nothing to do reads as a cost
+            # the list has not got. Rows that already hold what it produces
+            # are not eligible, so this is also what stops Claude proposing
+            # a second route to an answer already bought.
+            continue
+        units = op.charge_units(rows)
         out.append({"op": op.key, "rows": len(eligible),
-                    "credits": len(eligible) * op.credits_per_unit,
+                    "charged": len(units),
+                    "credits": len(units) * op.credits_per_unit,
                     "why": " ".join(str(item.get("why") or "").split())[:300]})
     return out or apollo_ops.recommend(rows)
 

@@ -591,8 +591,20 @@ def cmd_imports(args):
             price = "free" if op["free"] else (
                 f"{op['credits_per_unit']}/{op['unit']}")
             mark = " <- recommended" if op["key"] == best else ""
+            if not op["available"]:
+                mark = " (not wired up yet)"
             print(f"    {op['key']:<26} {price:<10} {op['eligible']:>4} rows  "
                   f"up to {op['estimated_credits']:>4} credits{mark}")
+            # Why the bill is smaller than the row count. Without this the
+            # price looks like an arithmetic mistake.
+            if op["shared"]:
+                print(f"    {'':<26} {op['eligible']} rows share "
+                      f"{op['charged']} "
+                      f"{apollo_ops.plural(op['unit'], op['charged'])}, "
+                      f"charged once each")
+            if op["already_have"]:
+                print(f"    {'':<26} {op['already_have']} already have this, "
+                      f"left out of the price")
 
     code = asyncio.run(_run())
     if code:

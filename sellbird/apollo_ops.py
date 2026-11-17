@@ -33,6 +33,13 @@ BULK_SIZE = 10
 PAUSE_SECONDS = 0.2
 
 
+def plural(word: str, count: int) -> str:
+    """"company" and "companies", not "companys". It is on screen."""
+    if count == 1:
+        return word
+    return word[:-1] + "ies" if word.endswith("y") else word + "s"
+
+
 def already_run(row: dict) -> set[str]:
     """Which operations have already run on this row (its ``route``)."""
     return {part for part in (row.get("route") or "").split(",") if part}
@@ -83,6 +90,18 @@ class ApolloOp:
     unit: str                              # contact | company | page
     requires: tuple[str, ...] = ()         # a row needs all of these
     requires_any: tuple[tuple[str, ...], ...] = ()   # ...and one of each group
+    # The row fields this operation actually writes. A row that already holds
+    # every one of them has nothing left to buy, so it is not eligible -- and
+    # because three different operations all produce ("email", "email_status"),
+    # that one rule also makes them mutually exclusive. Buying an address with
+    # people_enrich_id used to make the row newly eligible for
+    # people_match_email, which charged a second credit for the same answer.
+    produces: tuple[str, ...] = ()
+    # What one credit buys. "row" is a credit a row; "group" is a credit per
+    # distinct ``group_by`` value, which is how Apollo really bills a company
+    # record -- once, however many of its people are on your list.
+    charges_per: str = "row"
+    group_by: str = ""
     gives: str = ""
     plan_note: str = ""
     danger: bool = False                   # render loudly: this one is expensive
@@ -91,14 +110,20 @@ class ApolloOp:
     def eligible(self, rows: Iterable[dict]) -> list[dict]:
         """The rows this operation can act on.
 
-        A row it has already run on is not one of them, whatever that run
-        found: paying twice for the same answer is the mistake this whole
-        module exists to prevent. A row missing what the operation needs is
-        left alone rather than sent to Apollo to fail at a credit's risk.
+        Three reasons a row is left alone, all of them the same reason:
+        nobody should pay twice for one answer.
+
+        - This operation has already run on it, whatever that run found.
+        - It already holds everything this operation produces, even if some
+          other operation is what put it there.
+        - It is missing what this operation needs, so sending it to Apollo
+          would risk a credit on a call that cannot work.
         """
         out = []
         for row in rows:
             if self.key in already_run(row):
+                continue
+            if self.produces and all(row_field(row, f) for f in self.produces):
                 continue
             if any(not row_field(row, f) for f in self.requires):
                 continue
@@ -108,6 +133,27 @@ class ApolloOp:
             out.append(row)
         return out
 
+    def charge_units(self, rows: Iterable[dict]) -> list[list[dict]]:
+        """What one credit buys, as groups of rows.
+
+        A person costs a credit a person, so each unit is one row. A company
+        record costs a credit a company however many of its people are on the
+        list, so the unit is every row sharing that company: five colleagues
+        at one firm is one credit, and all five rows get the answer. Charging
+        that per row was pure waste, and the ``unit`` field said as much
+        while the arithmetic did the opposite.
+        """
+        eligible = self.eligible(rows)
+        if self.charges_per != "group" or not self.group_by:
+            return [[row] for row in eligible]
+        groups: dict[str, list[dict]] = {}
+        for row in eligible:
+            key = row_field(row, self.group_by).strip().lower()
+            # A row with no key of its own is its own group: it still needs
+            # the answer, and it cannot share anyone else's.
+            groups.setdefault(key or f"row:{row.get('id')}", []).append(row)
+        return list(groups.values())
+
     def estimate(self, rows: Iterable[dict]) -> int:
         """Credits this would cost at most, before anything is called.
 
@@ -115,11 +161,12 @@ class ApolloOp:
         find, so a run usually comes in under its estimate. Quoting the
         ceiling is the honest way round.
         """
-        return len(self.eligible(rows)) * self.credits_per_unit
+        return len(self.charge_units(rows)) * self.credits_per_unit
 
     def as_dict(self, rows: Iterable[dict] | None = None) -> dict:
         rows = list(rows or [])
         eligible = self.eligible(rows)
+        units = self.charge_units(rows)
         return {
             "key": self.key, "label": self.label, "blurb": self.blurb,
             "credits_per_unit": self.credits_per_unit, "unit": self.unit,
@@ -127,9 +174,23 @@ class ApolloOp:
             "danger": self.danger, "default": self.default,
             "free": self.credits_per_unit == 0,
             "eligible": len(eligible),
-            "estimated_credits": len(eligible) * self.credits_per_unit,
+            "charged": len(units),
+            "shared": len(eligible) - len(units),
+            "estimated_credits": len(units) * self.credits_per_unit,
             "needs": self._needs_text(),
+            "available": self.key in _RUNNERS,
+            # Only rows skipped because they already hold what this writes.
+            # Counting every skipped row here told people that five rows with
+            # no address at all "already have this", which is the opposite of
+            # true and the opposite of useful.
+            "already_have": self._already_have(rows),
         }
+
+    def _already_have(self, rows: Iterable[dict]) -> int:
+        if not self.produces:
+            return 0
+        return sum(1 for row in rows
+                   if all(row_field(row, f) for f in self.produces))
 
     def _needs_text(self) -> str:
         parts = [f.replace("_", " ") for f in self.requires]
@@ -146,6 +207,7 @@ OPS: dict[str, ApolloOp] = {
               "title, company, LinkedIn, and whether the address is deliverable.",
         credits_per_unit=1, unit="contact",
         requires=("email",),
+        produces=("email", "email_status"),
         gives="Full contact record and a verified/guess email status",
         default=True,
     ),
@@ -157,6 +219,7 @@ OPS: dict[str, ApolloOp] = {
               "deliverable, and the rest of the record.",
         credits_per_unit=1, unit="contact",
         requires=("apollo_id",),
+        produces=("email", "email_status"),
         gives="Work email address, seniority, location and company detail",
         default=True,
     ),
@@ -168,6 +231,7 @@ OPS: dict[str, ApolloOp] = {
         credits_per_unit=1, unit="contact",
         requires=("first_name",),
         requires_any=(("domain", "company"),),
+        produces=("email", "email_status"),
         gives="Work email address and the full contact record",
     ),
     "org_enrich": ApolloOp(
@@ -177,6 +241,8 @@ OPS: dict[str, ApolloOp] = {
               "its growth, industry, latest funding.",
         credits_per_unit=1, unit="company",
         requires=("domain",),
+        produces=("tech_stack", "employees", "industry"),
+        charges_per="group", group_by="domain",
         gives="Tech stack, headcount growth, funding detail",
     ),
     "org_job_postings": ApolloOp(
@@ -184,9 +250,13 @@ OPS: dict[str, ApolloOp] = {
         label="Read each company's open roles",
         blurb="Who a company is hiring, straight from Apollo. The strongest "
               "in-market signal there is, and it covers companies whose job "
-              "board Sellbird cannot read for free.",
-        credits_per_unit=1, unit="page",
+              "board Sellbird cannot read for free. One page of roles per "
+              "company, which is one credit however many of its people are "
+              "on your list.",
+        credits_per_unit=1, unit="company",
         requires=("apollo_org_id",),
+        produces=("open_roles",),
+        charges_per="group", group_by="apollo_org_id",
         gives="Open roles with titles, departments and posting dates",
         plan_note="Paid plans only",
     ),
@@ -206,6 +276,8 @@ OPS: dict[str, ApolloOp] = {
               "stage for a company you only have a name for.",
         credits_per_unit=0, unit="company",
         requires_any=(("domain", "company"),),
+        produces=("industry", "employees", "domain"),
+        charges_per="group", group_by="domain",
         gives="Industry, headcount, domain, tech stack, funding stage",
     ),
     "phone_reveal": ApolloOp(
@@ -215,6 +287,7 @@ OPS: dict[str, ApolloOp] = {
               "contact already cost. Nine credits a person.",
         credits_per_unit=8, unit="contact",
         requires=("apollo_id",),
+        produces=("phone",),
         gives="Direct mobile number",
         danger=True,
     ),
@@ -233,6 +306,19 @@ def menu(rows: Iterable[dict] | None = None) -> list[dict]:
     return [OPS[key].as_dict(rows) for key in MENU_ORDER if key in OPS]
 
 
+def runnable(key: str) -> bool:
+    """Whether this operation has an implementation behind it.
+
+    Two are declared and not wired: ``people_search`` returns new people
+    rather than filling in the rows it was given, which needs its own
+    staging path, and ``phone_reveal`` needs Apollo's asynchronous reveal
+    with a webhook. They stay in the registry because their prices are part
+    of the answer to "what can Apollo do and for how much", but nothing
+    should offer a button that cannot work.
+    """
+    return key in _RUNNERS
+
+
 def recommend(rows: Iterable[dict]) -> list[dict]:
     """Which operations actually fit this list, best first.
 
@@ -246,17 +332,29 @@ def recommend(rows: Iterable[dict]) -> list[dict]:
     """
     rows = list(rows)
     out = []
+    covered: set[tuple[str, ...]] = set()
     for key in MENU_ORDER:
         op = OPS[key]
-        if op.danger:
+        if op.danger or key not in _RUNNERS:
             continue
         eligible = op.eligible(rows)
         if not eligible:
             continue
+        # One route to an answer, not two. Three operations return a work
+        # address and its status, and listing them all as recommendations
+        # reads as "do all three", at a credit a row each time.
+        if op.produces and tuple(op.produces) in covered:
+            continue
+        covered.add(tuple(op.produces))
+        units = op.charge_units(rows)
+        why = (f"{len(eligible)} of {len(rows)} rows have {op._needs_text()}.")
+        if len(units) < len(eligible):
+            why += (f" {len(eligible)} rows share {len(units)} "
+                    f"{plural(op.unit, len(units))}, so that is what it costs.")
         out.append({"op": key, "rows": len(eligible),
-                    "credits": len(eligible) * op.credits_per_unit,
-                    "why": f"{len(eligible)} of {len(rows)} rows have "
-                           f"{op._needs_text()}."})
+                    "charged": len(units),
+                    "credits": len(units) * op.credits_per_unit,
+                    "why": why})
     return out
 
 
@@ -288,7 +386,7 @@ async def run_op(op: ApolloOp, client, rows: list[dict], *, max_credits: int,
     report = SpendReport(op=op.key)
     eligible = op.eligible(rows)
     if not eligible:
-        report.stopped = "no row has what this needs"
+        report.stopped = "no row needs this, or no row has what it needs"
         return report
     if max_credits <= 0 and op.credits_per_unit > 0:
         report.stopped = "no credits approved"
@@ -299,26 +397,43 @@ async def run_op(op: ApolloOp, client, rows: list[dict], *, max_credits: int,
         report.stopped = f"{op.key} cannot be run yet"
         return report
 
+    # One unit is one charge. For a person that is one row; for a company it
+    # is every row at that company, which is called for once and written to
+    # all of them.
+    units = op.charge_units(rows)
     batch_size = BULK_SIZE if op.key == "people_match_email" else 1
-    for start in range(0, len(eligible), batch_size):
+    for start in range(0, len(units), batch_size):
         if op.credits_per_unit and report.credits + op.credits_per_unit > max_credits:
             report.stopped = f"stopped at the {max_credits} credit cap"
             break
-        chunk = eligible[start:start + batch_size]
+        chunk = units[start:start + batch_size]
         if op.credits_per_unit:
             room = (max_credits - report.credits) // op.credits_per_unit
             chunk = chunk[:max(1, room)]
+        leads = [unit[0] for unit in chunk]
         try:
-            results = await runner(client, chunk)
+            results = await runner(client, leads)
         except Exception as e:  # one bad call must not lose the whole run
             logger.warning("apollo %s failed: %s", op.key, e)
-            results = [OpResult(row_id=r["id"], error=str(e)[:200]) for r in chunk]
-        for result in results:
-            report.attempted += 1
-            if result.found:
-                report.found += 1
-                report.credits += result.credits
-            report.results.append(result)
+            results = [OpResult(row_id=r["id"], error=str(e)[:200]) for r in leads]
+        by_lead = {r.row_id: r for r in results}
+        for unit in chunk:
+            answer = by_lead.get(unit[0]["id"])
+            if answer is None:
+                continue
+            report.credits += answer.credits
+            for row in unit:
+                report.attempted += 1
+                if answer.found:
+                    report.found += 1
+                report.results.append(OpResult(
+                    row_id=row["id"], found=answer.found,
+                    # The charge belongs to the row that was called for. The
+                    # others share the answer at no cost, and their row
+                    # credits must say so or the batch total double-counts.
+                    credits=answer.credits if row["id"] == unit[0]["id"] else 0,
+                    person=answer.person, organization=answer.organization,
+                    error=answer.error))
         if pause:
             await asyncio.sleep(pause)
     if report.attempted < len(eligible) and not report.stopped:
@@ -461,6 +576,10 @@ def summarise(report: SpendReport) -> str:
     label = op.label.lower() if op else report.op
     line = (f"{label}: {report.found} of {report.attempted} found, "
             f"{report.credits} credit{'s' if report.credits != 1 else ''} spent")
+    charged = sum(1 for r in report.results if r.credits)
+    if op and op.charges_per == "group" and report.attempted > charged:
+        line += (f" ({report.attempted} rows shared {charged} "
+                 f"{plural(op.unit, charged)})")
     return f"{line} ({report.stopped})" if report.stopped else line
 
 

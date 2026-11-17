@@ -1662,10 +1662,15 @@ async function loadImportBatch(id) {
         op.eligible + ' of these rows qualify &middot; ' +
         (op.free ? 'no credits' : 'up to <b>' + op.estimated_credits + ' credits</b>') +
         (op.plan_note ? ' &middot; ' + escHtml(op.plan_note) : '') + '</p>' +
+      sharedNote(op) + alreadyNote(op) +
+      (op.available === false
+        ? '<p class="desc">Not wired up in this fork yet. The price is here so ' +
+          'you can see what it would cost.</p>' : '') +
       '<button class="btn ' + (op.danger ? 'btn-danger' : recommended ? 'btn-primary' : 'btn-secondary') +
-        ' btn-sm"' + (op.eligible ? '' : ' disabled') +
+        ' btn-sm"' + (op.eligible && op.available !== false ? '' : ' disabled') +
         ' onclick="askEnrich(\'' + op.key + '\')">' +
-        (op.eligible ? 'Run this' : 'No rows qualify') + '</button></div>';
+        (op.available === false ? 'Not available yet'
+          : op.eligible ? 'Run this' : 'No rows qualify') + '</button></div>';
   }
   html += '</div></div>';
 
@@ -1770,6 +1775,29 @@ async function saveMapping() {
 }
 
 // Approving a spend: the estimate, then a cap, then the run.
+// A company record is one credit a company, however many of its people are
+// on the list. Say so, or the price looks like a mistake.
+function sharedNote(op) {
+  if (!Number(op.shared)) return '';
+  return '<p class="desc t-good">' + Number(op.eligible) + ' of these rows share ' +
+    Number(op.charged) + ' ' + plural(op.unit, Number(op.charged)) +
+    ', so you are charged for ' + Number(op.charged) + ', not ' +
+    Number(op.eligible) + '.</p>';
+}
+
+// Rows that already hold what this would buy. Showing the number is how the
+// user can see that a second run on the same list costs nothing.
+function alreadyNote(op) {
+  if (!Number(op.already_have)) return '';
+  return '<p class="desc">' + Number(op.already_have) +
+    ' already have this, so they are left out of the price.</p>';
+}
+
+function plural(word, count) {
+  if (count === 1) return word;
+  return word.endsWith('y') ? word.slice(0, -1) + 'ies' : word + 's';
+}
+
 async function askEnrich(opKey) {
   const data = await api('/api/imports/' + encodeURIComponent(_importBatch) + '/estimate', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1784,13 +1812,17 @@ async function askEnrich(opKey) {
   d.innerHTML =
     '<div class="modal-head"><div><h3 id="import-dialog-title">' + escHtml(data.label) + '</h3>' +
       '<div class="sub">' + data.rows + ' rows qualify' +
-      (data.skipped ? ', ' + data.skipped + ' do not (they need ' + escHtml(data.needs) + ')' : '') +
+      (data.skipped ? ', ' + data.skipped + ' do not (they need ' + escHtml(data.needs) +
+        ', or already have what this buys)' : '') +
       '.</div></div>' +
       '<button class="btn btn-ghost btn-sm btn-icon" onclick="closeImportDialog()" aria-label="Close">' + icon('close') + '</button></div>' +
     '<div class="modal-body">' +
       (free ? '<div class="notice good">This one is free. No credits are involved.</div>'
             : '<div class="notice wait">This will cost up to <b>' + data.credits +
-              ' credits</b>. Apollo charges nothing for a person it cannot find.</div>' +
+              ' credits</b>. Apollo charges nothing for a person it cannot find.' +
+              (Number(data.shared) ? ' These ' + data.rows + ' rows share ' +
+                Number(data.charged) + ' ' + plural(data.unit, Number(data.charged)) +
+                ', and a ' + escHtml(data.unit) + ' is charged once.' : '') + '</div>' +
               '<div class="form-group"><label class="form-label" for="enrich-cap">Spend at most</label>' +
               '<input class="form-input" id="enrich-cap" type="number" min="1" step="1" value="' +
               data.credits + '"><p class="desc">The run stops dead at this number, even mid-list.</p></div>') +

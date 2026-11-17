@@ -41,10 +41,13 @@ logger = logging.getLogger("sellbird.apollo_store")
 
 # apollo_seen.kind: an Apollo person id, or a company name lowercased.
 KINDS = ("person", "org")
-# Why something is in apollo_seen. "fetched" means it was paid for; "skipped"
-# means a reviewer ruled it out; "staged" means it is waiting on Imports.
-# Any of them stops it being offered by a later search.
-REASONS = ("fetched", "skipped", "staged")
+# Why something is in apollo_seen. "fetched" means a credit was spent on it;
+# "missed" means Apollo was asked and had nobody, which costs nothing;
+# "skipped" means a reviewer ruled it out; "staged" means it is waiting on
+# Imports. Any of them stops a later search offering it again, but only
+# "fetched" means "we already own this", which is what the duplicate check
+# acts on.
+REASONS = ("fetched", "missed", "skipped", "staged")
 
 
 def _now() -> str:

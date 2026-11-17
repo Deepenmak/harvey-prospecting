@@ -209,16 +209,38 @@ class ImportStore(StateManager):
             return cursor.rowcount or 0
 
     async def mark_known_contacts(self, batch_id: str) -> int:
-        """Mark every staged row whose address is already a prospect.
+        """Mark every staged row this workspace has already paid for.
 
-        Done before anything is enriched: paying Apollo for someone already
-        in the pipeline is the easiest credit to waste.
+        Done before anything is priced, let alone enriched: paying Apollo
+        twice for one person is the easiest credit in the world to waste.
+
+        Four ways a row is already ours, and it takes all four. Matching on
+        the address alone missed the one that matters most -- a candidate
+        from Apollo's free search has no address yet, by design, so its
+        Apollo person id is the only identity it has. Checking only the
+        address meant a candidate already bought in an earlier run was
+        staged, priced and bought again.
+
+        - the address is a prospect in the pipeline
+        - the address is a contact a past Apollo run returned
+        - the Apollo person id is a contact a past Apollo run returned
+        - the Apollo person id is in the ledger as fetched, which means a
+          credit was spent on them even if the contact was later removed
         """
         async with self._connect() as db:
             cursor = await db.execute(
                 """UPDATE import_rows SET status = 'duplicate', updated_at = ?
-                   WHERE batch_id = ? AND status = 'staged' AND email != ''
-                     AND email IN (SELECT email FROM prospects WHERE email != '')""",
+                   WHERE batch_id = ? AND status = 'staged' AND (
+                     (email != '' AND email IN
+                        (SELECT email FROM prospects WHERE email != ''))
+                     OR (email != '' AND email IN
+                        (SELECT email FROM apollo_contacts WHERE email != ''))
+                     OR (apollo_id != '' AND apollo_id IN
+                        (SELECT apollo_id FROM apollo_contacts))
+                     OR (apollo_id != '' AND apollo_id IN
+                        (SELECT value FROM apollo_seen
+                         WHERE kind = 'person' AND reason = 'fetched'))
+                   )""",
                 (_now(), batch_id))
             await db.commit()
             return cursor.rowcount or 0
