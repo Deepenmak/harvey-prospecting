@@ -2526,6 +2526,81 @@ async def start_profile():
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
 
+_writer_task: "asyncio.Task | None" = None
+_writer_report: dict | None = None
+
+
+@app.get("/api/writer/run")
+async def writer_run_status():
+    """Whether a hand-started writing pass is going, and what it did."""
+    running = bool(_writer_task and not _writer_task.done())
+    return {"running": running, "report": None if running else _writer_report}
+
+
+@app.post("/api/writer/run")
+async def start_writer():
+    """Write the first emails now, for everyone waiting on one.
+
+    The heartbeat does this by itself every cycle. This exists for the hours
+    before anyone starts it: Today would say "write first emails for 30
+    contacts" and the only button went to a Start screen. Same agent, same
+    rules -- deliverable addresses only, the same word limits, and every
+    draft still lands in the Outbox for approval. Nothing is sent here.
+    """
+    global _writer_task, _writer_report
+
+    if _writer_task and not _writer_task.done():
+        return JSONResponse({"success": False, "message": "already writing"},
+                            status_code=409)
+    # Never alongside the loop: both would pick the same 'new' prospects and
+    # each make a campaign for them, which is two drafts to one person.
+    if _check_sellbird_pid() is not None:
+        return JSONResponse(
+            {"success": False,
+             "message": "Sellbird is running, and writes these by itself. "
+                        "Stop it on Controls first if you want them now."},
+            status_code=409)
+    blockers = await loop_blockers()
+    if blockers:
+        return JSONResponse(
+            {"success": False,
+             "message": f"{blockers[0]['title']}. {blockers[0]['detail']}"},
+            status_code=400)
+
+    try:
+        from sellbird.agents.writer import Writer
+        from sellbird.brain import Brain
+        from sellbird.config import load_config, load_env
+
+        config = load_config(str(_resolve_config_file()))
+        state = _state()
+        await state.init_db()
+        before = await _scalar("SELECT COUNT(*) FROM campaigns")
+        writer = Writer(Brain(state, config.brain), state, config, load_env())
+
+        async def _go():
+            global _writer_report
+            try:
+                await writer.run()
+                after = await _scalar("SELECT COUNT(*) FROM campaigns")
+                drafted = await _scalar(
+                    "SELECT COUNT(*) FROM outbox WHERE step = 1 AND status IN "
+                    "('pending_review', 'approved')")
+                _writer_report = {"campaigns": max(0, after - before),
+                                  "waiting_for_you": drafted, "error": ""}
+            except Exception as exc:
+                logger.exception("writing run failed")
+                _writer_report = {"campaigns": 0, "waiting_for_you": 0,
+                                  "error": str(exc)}
+
+        _writer_report = None
+        _writer_task = asyncio.create_task(_go())
+        return {"success": True}
+    except Exception as e:
+        logger.warning(f"Could not start a writing pass: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
 @app.post("/api/discover/stop")
 async def stop_discovery():
     """Kill switch. Read between batches, so an in-flight run stops cleanly."""

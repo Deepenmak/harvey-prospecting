@@ -1245,3 +1245,7 @@ table.nowrap tr.detail-row > td { white-space: normal; }
   .lead-dl { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .lead-dl dd { margin-bottom: 6px; }
 }
+
+.write-now { display: flex; align-items: center; gap: var(--sp-2); justify-content: center; margin-top: var(--sp-3); }
+.write-now .muted, .live-next .muted { font-size: var(--fs-caption); }
+.bad-text { color: var(--bad); }

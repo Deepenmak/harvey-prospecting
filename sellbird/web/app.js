@@ -548,9 +548,77 @@ async function loadLiveStatus() {
     blockedHtml + stoppedHtml +
     '<div class="steps">' + rows + '</div>' +
     (d.next ? '<div class="live-next">' + icon('arrow') + '<span><b>Next</b> · ' + escHtml(d.next) + '</span>' +
-      (d.next_tab ? '<button class="btn btn-secondary btn-sm" onclick="goTab(' + jsq(d.next_tab) + ')">Go</button>' : '') +
+      (/^Write first emails/.test(d.next) && !d.loop_running && !blocked.length
+        ? writeNowButton()
+        : d.next_tab ? '<button class="btn btn-secondary btn-sm" onclick="goTab(' + jsq(d.next_tab) + ')">Go</button>' : '') +
       '</div>' : '') +
     '<div class="live-flag">Updated ' + new Date().toLocaleTimeString() + ' · refreshes every 10 seconds</div>';
+}
+
+
+// Writing the first emails by hand, for the hours before anyone starts the
+// loop. Same agent and same rules as the heartbeat's: deliverable addresses
+// only, and every draft lands in the Outbox for approval. Nothing is sent.
+let _writePoll = null;
+let _writeNote = {text: '', tone: ''};
+
+function writeNowButton(disabled) {
+  return '<button class="btn btn-primary btn-sm" id="btn-write-now" onclick="writeNow()"' +
+    (disabled ? ' disabled' : '') + '>Write them now</button>' +
+    '<span id="write-now-note" class="' + (_writeNote.tone || 'muted') + '">' +
+    (_writeNote.text ? ' ' + escHtml(_writeNote.text) : '') + '</span>';
+}
+
+function writeNote(text, tone) {
+  _writeNote = {text: text || '', tone: tone || 'muted'};
+  const el = document.getElementById('write-now-note');
+  if (el) {
+    el.className = _writeNote.tone;
+    el.textContent = _writeNote.text ? ' ' + _writeNote.text : '';
+  }
+}
+
+async function writeNow() {
+  const btn = document.getElementById('btn-write-now');
+  if (btn) btn.disabled = true;
+  writeNote('Writing. One email at a time, so this takes a minute.');
+  const data = await api('/api/writer/run', {method: 'POST'});
+  if (!data || !data.success) {
+    writeNote((data && data.message) || 'Could not start writing.', 'bad-text');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  renderWriteNow();
+}
+
+// Picks up a pass already going, so switching tabs doesn't lose it.
+async function renderWriteNow() {
+  if (_writePoll) { clearInterval(_writePoll); _writePoll = null; }
+  const tick = async () => {
+    const d = await api('/api/writer/run');
+    if (!d) return;
+    const btn = document.getElementById('btn-write-now');
+    if (d.running) {
+      if (btn) btn.disabled = true;
+      writeNote('Writing. One email at a time, so this takes a minute.');
+      return;
+    }
+    clearInterval(_writePoll); _writePoll = null;
+    if (btn) btn.disabled = false;
+    const r = d.report;
+    if (!r) { writeNote(''); return; }
+    if (r.error) { writeNote(r.error, 'bad-text'); return; }
+    if (!r.campaigns) {
+      writeNote('Nothing to write for. A contact needs a verified or catch-all address.');
+      return;
+    }
+    showToast(r.campaigns + ' campaign(s) written. The drafts are in the Outbox.', 'success');
+    writeNote('');
+    if (currentTab === 'campaigns') loadCampaigns();
+    if (currentTab === 'today') { loadLiveStatus(); loadToday(); }
+  };
+  await tick();
+  if (!_writePoll) _writePoll = setInterval(tick, 3000);
 }
 
 // KPI cards. Totals come from /api/today; the 14-day bars from /api/trend.
@@ -3253,8 +3321,24 @@ async function loadCampaigns() {
   if (!data) { el.innerHTML = offlineState(); return; }
   _campaigns = data;
   if (!data.length) {
+    const live = await api('/api/live-status') || {};
+    const waiting = (live.steps || []).find(x => x.label === 'Write first emails');
+    const left = waiting ? Math.max(0, Number(waiting.total) - Number(waiting.done)) : 0;
+    const stop = (live.blocked || [])[0];
     el.innerHTML = emptyState(icon('campaigns'), 'No campaigns yet',
-      'The Writer agent hasn\'t drafted any sequences. It kicks in automatically once Sellbird has scored prospects to write for.');
+      'The Writer drafts a 3-email sequence for every contact with a deliverable address, ' +
+      'and does it by itself once Sellbird is running. ' +
+      (left ? '<b>' + left + '</b> contact(s) are waiting for one now.'
+            : 'Nothing is waiting for one right now.')) +
+      (!left ? ''
+        : stop
+          ? '<div class="notice bad"><b>' + escHtml(stop.title) + '</b><br>' + escHtml(stop.detail) +
+            (stop.tab ? '<br><a href="#" onclick="goTab(' + jsq(stop.tab) + ');return false">Take me there</a>' : '') +
+            '</div>'
+          : live.loop_running
+            ? '<p class="desc">Sellbird is running, so it writes these by itself within a cycle.</p>'
+            : '<div class="write-now">' + writeNowButton() + '</div>');
+    if (left && !stop && !live.loop_running) renderWriteNow();
     return;
   }
   let html = '';
