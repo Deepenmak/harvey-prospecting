@@ -221,6 +221,128 @@ def _check_sellbird_pid() -> int | None:
     return None
 
 
+def _loop_blockers() -> list[dict]:
+    """Why the heartbeat can't work right now, in plain words.
+
+    The dashboard used to say only "Sellbird is stopped". Everything that
+    stops the loop is knowable without pressing anything, and saying which
+    is the difference between a five-minute fix and a day of guessing --
+    especially in a container, where the reason is buried in `docker logs`
+    and the loop restarts every 60 seconds without anyone seeing why.
+
+    Each blocker is {title, detail, tab}: what is wrong, what to do, and
+    where in this dashboard to do it ("" when it is a terminal job).
+    """
+    out: list[dict] = []
+
+    # A hosted workspace keeps its config and its brain somewhere else
+    # entirely, so none of these file and CLI checks describe it.
+    try:
+        from sellbird.workspace_home import current_home
+        if current_home().hosted:
+            return out
+    except Exception:
+        pass
+
+    # 1. The heartbeat refuses to start at all until setup is done
+    #    (sellbird.main._needs_setup). Say which half is missing.
+    if not (PROJECT_ROOT / ".env").exists():
+        out.append({
+            "title": "No credentials file yet",
+            "detail": "Sellbird keeps your keys in .env and won't start without it. "
+                      "Add a key on Settings and it is written for you.",
+            "tab": "settings"})
+    company = ""
+    config_path = _resolve_config_file()
+    try:
+        if config_path.exists():
+            data = yaml.safe_load(read_user_text(config_path)) or {}
+            company = ((data.get("persona") or {}).get("company") or "").strip()
+    except Exception as e:
+        logger.debug(f"Could not read {config_path} for the loop check: {e}")
+    if company in ("", "Your Company"):
+        out.append({
+            "title": "Your company isn't filled in",
+            "detail": "The heartbeat won't start while the config still says "
+                      "\"Your Company\". Fill in Your company and save; it is kept "
+                      "on the data volume, so a redeploy keeps it.",
+            "tab": "company"})
+
+    # 2. The brain. A missing or too-old CLI pauses every cycle before any
+    #    work, including the free website reading, so it looks like nothing
+    #    is happening at all.
+    provider = "claude"
+    try:
+        from sellbird.config import load_config
+        provider = (load_config(str(config_path)).brain.provider or "claude").lower()
+    except Exception:
+        pass
+    if provider == "claude":
+        try:
+            from sellbird.claude_runtime import ClaudeRuntimeError, check_cli
+            check_cli()
+        except ClaudeRuntimeError as e:
+            out.append({"title": "Claude Code can't be used here",
+                        "detail": str(e), "tab": ""})
+        except Exception as e:
+            logger.debug(f"Claude CLI check failed: {e}")
+        else:
+            if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+                try:
+                    from sellbird.integrations.quota import get_oauth_token
+                    signed_in = bool(get_oauth_token())
+                except Exception:
+                    signed_in = True      # can't tell: don't cry wolf
+                if not signed_in:
+                    out.append({
+                        "title": "Claude isn't signed in",
+                        "detail": "Sellbird thinks with your Claude subscription. Open a "
+                                  "terminal on this machine and run: claude login",
+                        "tab": ""})
+    return out
+
+
+_BLOCKERS_TTL_SECONDS = 30
+_blockers_cache: tuple[float, list[dict]] | None = None
+
+
+async def loop_blockers() -> list[dict]:
+    """``_loop_blockers`` off the event loop, and not more than twice a minute.
+
+    It reads files and may run ``claude --help``; the status endpoint polls
+    every few seconds, so neither belongs inline.
+    """
+    global _blockers_cache
+    import time as _time
+
+    now = _time.monotonic()
+    if _blockers_cache and now - _blockers_cache[0] < _BLOCKERS_TTL_SECONDS:
+        return _blockers_cache[1]
+    try:
+        found = await asyncio.to_thread(_loop_blockers)
+    except Exception as e:      # a status call must never fail over this
+        logger.warning(f"Could not work out what is blocking the loop: {e}")
+        found = []
+    _blockers_cache = (now, found)
+    return found
+
+
+async def _paused_reason() -> str:
+    """What the loop last paused itself over, if it still stands."""
+    try:
+        from sellbird.brain import active_brain_status
+        from sellbird.config import load_config
+        provider = (load_config(str(_resolve_config_file())).brain.provider
+                    or "claude").lower()
+        state = _state()
+        await state.init_db()
+        status = active_brain_status(
+            await state.get_setting("brain_status") or "", provider)
+        return str(status.get("reason") or "")
+    except Exception:
+        return ""
+
+
 # ── Setup Status ──
 
 
@@ -1037,7 +1159,12 @@ async def get_sellbird_status():
     except Exception:
         paused = ""
     return {"running": pid is not None, "pid": pid, "started_at": started,
-            "sending_paused": paused}
+            "sending_paused": paused,
+            # Why it can't work, whether or not a process is alive: a loop
+            # that starts and pauses every cycle looks identical to a
+            # healthy one from the outside.
+            "blocked": await loop_blockers(),
+            "paused_reason": await _paused_reason()}
 
 
 @app.post("/api/sellbird/start")
@@ -2599,6 +2726,14 @@ async def get_live_status():
         "stopped": stopped,
         "next": next_up,
         "next_tab": next_tab,
+        # Whether anything can act on that next step at all. It sits beside
+        # the advice rather than replacing it: a list-builder who never runs
+        # the loop still wants to know what the pipeline needs, and someone
+        # whose loop is wedged needs to be told before they follow advice
+        # nothing is going to carry out.
+        "loop_running": _check_sellbird_pid() is not None,
+        "blocked": await loop_blockers(),
+        "paused_reason": await _paused_reason(),
         "cost_usd": round(cost, 4),
         "updated_at": now.isoformat() + "Z",
     }

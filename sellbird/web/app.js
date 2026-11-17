@@ -523,10 +523,29 @@ async function loadLiveStatus() {
     ? '<div class="banner bad" style="margin:8px 0 0">' + icon('alert') + '<p style="color:inherit">' +
       (d.stopped || []).map(r => escHtml(jobName(r))).join(', ') + ' stopped before finishing.</p></div>'
     : '';
+  // Whether anything is going to carry out the advice below. Without this,
+  // a pipeline nobody is working reads exactly like one that is: the steps
+  // sit at zero and "Next" names a job no agent has ever started.
+  const blocked = d.blocked || [];
+  const blockedHtml = blocked.length
+    ? '<div class="banner bad" style="margin:8px 0 0">' + icon('alert') +
+      '<p style="color:inherit"><b>Sellbird can\'t run: ' + escHtml(blocked[0].title.toLowerCase()) +
+      '.</b> ' + escHtml(blocked[0].detail) + '</p>' +
+      (blocked[0].tab ? '<button class="btn btn-secondary btn-sm" onclick="goTab(' +
+        jsq(blocked[0].tab) + ')">Fix it</button>' : '') + '</div>'
+    : d.paused_reason
+      ? '<div class="banner wait" style="margin:8px 0 0">' + icon('alert') +
+        '<p style="color:inherit"><b>Sellbird has paused itself.</b> ' +
+        escHtml(d.paused_reason) + '</p></div>'
+      : d.loop_running === false
+        ? '<div class="banner wait" style="margin:8px 0 0">' + icon('alert') +
+          '<p style="color:inherit">Sellbird isn\'t running, so nothing below moves on its own.</p>' +
+          '<button class="btn btn-secondary btn-sm" onclick="goTab(\'controls\')">Start it</button></div>'
+        : '';
   el.innerHTML =
     '<div class="live-head">' + runningHtml +
       '<span class="setup-pct">Cost so far $' + Number(d.cost_usd || 0).toFixed(2) + '</span></div>' +
-    stoppedHtml +
+    blockedHtml + stoppedHtml +
     '<div class="steps">' + rows + '</div>' +
     (d.next ? '<div class="live-next">' + icon('arrow') + '<span><b>Next</b> · ' + escHtml(d.next) + '</span>' +
       (d.next_tab ? '<button class="btn btn-secondary btn-sm" onclick="goTab(' + jsq(d.next_tab) + ')">Go</button>' : '') +
@@ -1930,6 +1949,23 @@ async function loadSellbirdStatus() {
   } else {
     meta.innerHTML = 'Sellbird wakes every few minutes, does what needs doing, and sleeps.';
   }
+
+  // "Stopped" on its own sent people hunting through container logs. Say
+  // what is in the way, and say it whether or not a process is alive: a
+  // loop that pauses every cycle looks exactly like a healthy one here.
+  const why = document.getElementById('control-why');
+  if (why) {
+    const blocked = data.blocked || [];
+    why.innerHTML = blocked.map(b =>
+      '<div class="notice bad"><b>' + escHtml(b.title) + '</b><br>' + escHtml(b.detail) +
+      (b.tab ? '<br><a href="#" onclick="goTab(' + jsq(b.tab) + ');return false">Take me there</a>' : '') +
+      '</div>').join('') +
+      (!blocked.length && data.paused_reason
+        ? '<div class="notice wait"><b>Sellbird has paused itself</b><br>' +
+          escHtml(data.paused_reason) + '</div>' : '');
+  }
+  const headerWhy = (data.blocked || [])[0];
+  if (headerWhy && !running) headerText.textContent = headerWhy.title;
 
   document.getElementById('btn-start').style.display = running ? 'none' : '';
   document.getElementById('btn-stop').style.display = running ? '' : 'none';
