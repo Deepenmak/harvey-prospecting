@@ -641,15 +641,22 @@ async def exports_in_sync(store, path: Path | None = None) -> bool:
     """Whether the contact files still hold everything the database does.
 
     A count, not a diff, and deliberately so: the failure this guards
-    against is the files being gone or thinner than the record -- a fresh
-    volume, a deleted exports/, a write that did not finish. A full
-    reconcile runs after every fetch anyway, so this only has to decide
-    whether to repair now.
+    against is one side being gone or thinner than the other -- a fresh
+    volume, a deleted exports/, a write that did not finish, or a database
+    whose Apollo tables have only just been migrated in. A full reconcile
+    runs after every fetch anyway, so this only has to decide whether to
+    repair now.
+
+    An empty database beside a full exports/ is the upgrade case, not a
+    quiet one: it used to answer "in sync", which is why a dashboard opened
+    before the first heartbeat showed no contacts at all while the files
+    beside it held every one of them.
     """
     stored = await store.contact_count()
+    on_disk = len(read_contacts(CONTACTS_FILE if path is None else path))
     if not stored:
-        return True
-    return len(read_contacts(CONTACTS_FILE if path is None else path)) >= stored
+        return not on_disk
+    return on_disk >= stored
 
 
 async def reconcile(state) -> dict:

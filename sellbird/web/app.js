@@ -2681,94 +2681,346 @@ function fbCampaign(i) {
   if (c) submitFeedback('campaign', c.id, 'What should Sellbird do differently in the emails it writes next? (e.g. "shorter; don\'t mention reviews")');
 }
 
-// Search and status filter live outside the table, so the 15-second refresh
+// The lead view. One row holds everything known about a person: who they
+// are, the reviewer's fit, what the research found, whether it held up, the
+// angle, the draft, and where they stand in the pipeline. /api/leads joins
+// Apollo's record to the pipeline; this draws it.
+//
+// Search, filters and sort live outside the table, so the 15-second refresh
 // re-renders rows without losing what you typed.
 let _contactQuery = '', _contactFilter = 'all';
+let _leadSeg = '', _leadFit = '', _leadIntent = '';
+let _leadSummary = {}, _leadSegments = [], _leadSort = '', _leadDir = 1, _leadOpen = '';
 const CONTACT_FILTERS = [
   ['all', 'All', null],
   ['todo', 'To write', ['new', 'queued']],
   ['contacted', 'Contacted', ['contacted']],
-  ['replied', 'Replied', ['replied', 'interested', 'meeting']],
+  ['replied', 'Replied', ['replied', 'interested', 'meeting', 'accepted_offer']],
+  ['fetched', 'Not in the pipeline', ['fetched']],
   ['closed', 'Closed out', null],
+];
+// Best first. A blank fit sits above a ruled-out one: "nobody has reviewed
+// this yet" is worth more than "we looked and said no".
+const FIT_ORDER = {a: 0, b: 1, '': 2, skip: 3};
+const INTENT_ORDER = {high: 0, medium: 1, low: 2, unknown: 3, '': 4};
+// Eight columns is what fits beside the sidebar without scrolling. The
+// segment rides on the company cell rather than taking a column of its own,
+// and everything else about a lead is one click away in the dossier.
+// Eight columns is what fits beside the sidebar. The widths are fixed and
+// add up to a hundred, so the table never scrolls sideways however long a
+// job title or an angle runs: the cell shows what fits and the dossier
+// under it shows all of it. The segment rides on the company cell.
+const LEAD_COLS = [
+  ['fit', 'Fit', '7%'], ['intent', 'Intent', '8%'], ['name', 'Name', '20%'],
+  ['company', 'Company', '17%'], ['email', 'Email', '18%'],
+  ['angle', 'Why they would buy', '20%'], ['status', 'Stands at', '10%'],
 ];
 
 async function loadProspects() {
   const el = document.getElementById('prospects-table');
-  const data = await api('/api/prospects');
-  if (!data) { el.innerHTML = offlineState(); return; }
-  _prospects = data;
-  if (!data.length) {
+  const data = await api('/api/leads');
+  if (!data || data.error) { el.innerHTML = offlineState(); return; }
+  _prospects = data.rows || [];
+  _leadSummary = data.summary || {};
+  _leadSegments = data.segments || [];
+  renderLeadStats();
+  renderLeadSegments();
+  if (!_prospects.length) {
     el.innerHTML = emptyState(icon('contacts'), 'No contacts yet',
-      'Sellbird hasn\'t found any prospects. Once it\'s running, the Scout agent searches the web for people matching your ideal customer profile in <b>sellbird.yaml</b>. ' +
-      'Already have a list from elsewhere? <a href="#" onclick="openImportContacts();return false">Import it as JSON</a>.');
+      'Nothing has been fetched yet. The <a href="#" onclick="goTab(\'discover\');return false">Apollo tab</a> ' +
+      'searches for free and stages what it finds, and the Scout agent finds people on the web once Sellbird is running. ' +
+      'Already have a list? <a href="#" onclick="openImportContacts();return false">Add contacts</a>.');
     return;
   }
   if (!document.getElementById('contact-rows')) {
-    el.innerHTML = '<div class="toolbar">' +
-      '<label class="search">' + icon('discover') +
-        '<input class="form-input" id="contact-search" type="search" placeholder="Search name, company, email" ' +
-        'aria-label="Search contacts" oninput="_contactQuery=this.value;renderContacts()"></label>' +
-      '<div class="segmented" id="contact-filters" role="group" aria-label="Filter by status"></div>' +
-      '</div><div id="contact-rows"></div>';
-    // A rebuild after an offline blip must show the search still applied.
-    document.getElementById('contact-search').value = _contactQuery;
+    el.innerHTML = leadToolbar();
+    // A rebuild after an offline blip must show the search and filters still applied.
+    leadSetValue('contact-search', _contactQuery);
+    leadSetValue('lead-seg', _leadSeg);
+    leadSetValue('lead-fit', _leadFit);
+    leadSetValue('lead-intent', _leadIntent);
   }
   renderContacts();
 }
 
+function leadSetValue(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value || '';
+}
+
+function leadToolbar() {
+  const segs = _leadSegments.map(s =>
+    '<option value="' + escHtml(s.key) + '">' + escHtml(s.label || s.key) + '</option>').join('');
+  return '<div class="toolbar">' +
+    '<label class="search">' + icon('discover') +
+      '<input class="form-input" id="contact-search" type="search" ' +
+      'placeholder="Search name, company, title, angle" aria-label="Search contacts" ' +
+      'oninput="_contactQuery=this.value;renderContacts()"></label>' +
+    (segs ? '<select class="form-input pick" id="lead-seg" aria-label="Filter by segment" ' +
+      'onchange="_leadSeg=this.value;renderContacts()">' +
+      '<option value="">Every segment</option>' + segs + '</select>' : '') +
+    '<select class="form-input pick" id="lead-fit" aria-label="Filter by fit" ' +
+      'onchange="_leadFit=this.value;renderContacts()">' +
+      '<option value="">Any fit</option><option value="a">Strong only</option>' +
+      '<option value="b">Fit only</option><option value="none">Unreviewed</option>' +
+      '<option value="skip">Ruled out</option></select>' +
+    '<select class="form-input pick" id="lead-intent" aria-label="Filter by intent" ' +
+      'onchange="_leadIntent=this.value;renderContacts()">' +
+      '<option value="">Any intent</option><option value="buying">Showing intent</option>' +
+      '<option value="high">High only</option><option value="none">Not researched yet</option>' +
+      '</select>' +
+    '</div>' +
+    '<div class="segmented" id="contact-filters" role="group" aria-label="Filter by where they stand"></div>' +
+    '<div id="contact-rows"></div>';
+}
+
+// The figures above the table. Every one is a count of the rows below it, so
+// any of them can be checked by filtering.
+function renderLeadStats() {
+  const el = document.getElementById('lead-stats');
+  if (!el) return;
+  const s = _leadSummary;
+  const n = v => Number(v || 0).toLocaleString();
+  const tile = (label, value, notes) =>
+    '<div class="stat-card"><div class="label">' + label + '</div>' +
+    '<div class="value">' + value + '</div>' +
+    (notes && notes.length ? '<div class="breakdown">' + notes.filter(Boolean).map(t =>
+      '<span class="chip">' + t + '</span>').join('') + '</div>' : '') + '</div>';
+  el.innerHTML = '<div class="stats-grid">' +
+    tile('Contacts', n(s.contacts), [
+      '<b>' + n(s.with_email) + '</b> with an address',
+      '<b>' + n(s.in_pipeline) + '</b> in the pipeline']) +
+    tile('Verified emails', n(s.verified),
+      [Number(s.with_email) ? 'of ' + n(s.with_email) + ' addresses' : '']) +
+    tile('Strong fits', n(s.strong),
+      [Number(s.ruled_out) ? '<b>' + n(s.ruled_out) + '</b> ruled out' : '']) +
+    tile('Showing buying intent', n(s.intent),
+      ['of <b>' + n(s.researched) + '</b> researched',
+       Number(s.checked) ? '<b>' + n(s.checked) + '</b> fact-checked' : '']) +
+    tile('First-touch drafts', n(s.drafted), ['written, none sent from here']) +
+    tile('Apollo credits spent', n(s.credits_used), ['one credit, one contact']) +
+    '</div>';
+}
+
+// Where the credits have gone, and what each segment is actually returning.
+function renderLeadSegments() {
+  const el = document.getElementById('lead-segments');
+  if (!el) return;
+  const rows = _leadSegments.filter(s => Number(s.contacts) > 0);
+  if (!rows.length) { el.innerHTML = ''; return; }
+  const max = Math.max.apply(null, rows.map(s => Number(s.contacts) || 0)) || 1;
+  el.innerHTML = '<div class="card"><div class="card-head"><h3>Leads by segment</h3>' +
+    '<span class="meta">Strong fits in green</span></div>' +
+    '<div class="lead-bars">' + rows.map(s => {
+      const strong = Number(s.strong) || 0, total = Number(s.contacts) || 0;
+      return '<div class="lead-bar"><span class="k" title="' + escHtml(s.label || s.key) + '">' +
+        escHtml(s.label || s.key) + '</span>' +
+        '<span class="bar" role="img" aria-label="' + strong + ' strong of ' + total + '">' +
+          '<span class="c-good" style="width:' + (100 * strong / max) + '%"></span>' +
+          '<span class="c-accent-soft" style="width:' + (100 * (total - strong) / max) + '%"></span>' +
+        '</span>' +
+        '<span class="v">' + total + ' <small>' + strong + ' strong</small></span></div>';
+    }).join('') + '</div></div>';
+}
+
 function contactMatches(p, f) {
-  const known = ['new', 'queued', 'contacted', 'replied', 'interested', 'meeting'];
+  const known = ['new', 'queued', 'contacted', 'replied', 'interested', 'meeting',
+                 'accepted_offer', 'fetched'];
   if (f === 'all') return true;
   if (f === 'closed') return !known.includes(p.status);
   const hit = CONTACT_FILTERS.find(x => x[0] === f);
   return !!(hit && hit[2] && hit[2].includes(p.status));
 }
 
+function leadMatches(p) {
+  if (_leadSeg && p.segment !== _leadSeg) return false;
+  const fit = String(p.fit || '').toLowerCase();
+  if (_leadFit === 'none') { if (fit) return false; }
+  else if (_leadFit && fit !== _leadFit) return false;
+  const intent = String(p.intent || '').toLowerCase();
+  if (_leadIntent === 'none') { if (intent) return false; }
+  else if (_leadIntent === 'buying') { if (intent !== 'high' && intent !== 'medium') return false; }
+  else if (_leadIntent && intent !== _leadIntent) return false;
+  const q = _contactQuery.trim().toLowerCase();
+  if (q && ![p.name, p.company, p.title, p.email, p.angle, p.fit_reason, p.signals,
+             p.segment_label].join(' ').toLowerCase().includes(q)) return false;
+  return true;
+}
+
 function setContactFilter(f) { _contactFilter = f; renderContacts(); }
+
+// Clicking a heading sorts by it; clicking it again reverses. No sort means
+// the order the server sent: fit, then intent, then the fact check, then score.
+function sortLeads(key) {
+  if (_leadSort === key) {
+    if (_leadDir === -1) { _leadSort = ''; _leadDir = 1; } else _leadDir = -1;
+  } else { _leadSort = key; _leadDir = 1; }
+  renderContacts();
+}
+
+function leadSortKey(p) {
+  const low = v => String(v === undefined || v === null ? '' : v).toLowerCase();
+  switch (_leadSort) {
+    case 'fit': { const v = own(FIT_ORDER, low(p.fit)); return v === undefined ? 9 : v; }
+    case 'intent': { const v = own(INTENT_ORDER, low(p.intent)); return v === undefined ? 9 : v; }
+    case 'segment': return low(p.segment_label || p.segment);
+    case 'status': return low(statusMeta(p.status).label);
+    case 'name': return low(p.name);
+    default: return low(p[_leadSort]);
+  }
+}
+
+function leadKey(p) { return String(p.apollo_id || p.id || p.email || ''); }
+
+function toggleLead(key) {
+  _leadOpen = _leadOpen === key ? '' : key;
+  renderContacts();
+}
 
 function renderContacts() {
   const rowsEl = document.getElementById('contact-rows');
   const filtersEl = document.getElementById('contact-filters');
   if (!rowsEl) return;
-  const q = _contactQuery.trim().toLowerCase();
-  const found = p => !q || [p.first_name, p.last_name, p.company, p.email, p.title].join(' ').toLowerCase().includes(q);
   filtersEl.innerHTML = CONTACT_FILTERS.map(f =>
-    '<button class="' + (f[0] === _contactFilter ? 'on' : '') + '" aria-pressed="' + (f[0] === _contactFilter) + '" onclick="setContactFilter(\'' + f[0] + '\')">' +
-      f[1] + ' <span class="n">' + _prospects.filter(p => contactMatches(p, f[0]) && found(p)).length + '</span></button>'
-  ).join('');
+    '<button class="' + (f[0] === _contactFilter ? 'on' : '') + '" aria-pressed="' +
+      (f[0] === _contactFilter) + '" onclick="setContactFilter(\'' + f[0] + '\')">' +
+      f[1] + ' <span class="n">' +
+      _prospects.filter(p => contactMatches(p, f[0]) && leadMatches(p)).length +
+      '</span></button>').join('');
 
-  const rows = _prospects.map((p, i) => [p, i]).filter(([p]) => contactMatches(p, _contactFilter) && found(p));
+  let rows = _prospects.map((p, i) => [p, i])
+    .filter(([p]) => contactMatches(p, _contactFilter) && leadMatches(p));
+  if (_leadSort) {
+    rows.sort((a, b) => {
+      const x = leadSortKey(a[0]), y = leadSortKey(b[0]);
+      return (x < y ? -1 : x > y ? 1 : a[1] - b[1]) * _leadDir;
+    });
+  }
   if (!rows.length) {
     rowsEl.innerHTML = '<div class="table-card">' + emptyState(icon('discover'), 'No matches',
-      'Nothing matches that search and filter.') + '</div>';
+      'Nothing matches that search and those filters.') + '</div>';
     return;
   }
-  let html = '<div class="table-card"><table class="nowrap"><thead><tr><th>Name</th><th>Company</th><th>Email</th>' +
-    '<th>Score</th><th>Status</th><th>Source</th><th>Added</th><th></th></tr></thead><tbody>';
+  const arrow = _leadDir === 1 ? ' ↑' : ' ↓';
+  let html = '<div class="table-card"><table class="nowrap lead-table"><colgroup>' +
+    LEAD_COLS.map(c => '<col style="width:' + c[2] + '">').join('') +
+    '</colgroup><thead><tr>' +
+    LEAD_COLS.map(c => '<th class="sortable"' +
+      (_leadSort === c[0] ? ' aria-sort="' + (_leadDir === 1 ? 'ascending' : 'descending') + '"' : '') +
+      '><button type="button" onclick="sortLeads(\'' + c[0] + '\')">' + c[1] +
+      (_leadSort === c[0] ? arrow : '') + '</button></th>').join('') +
+    '</tr></thead><tbody>';
   for (const [p, i] of rows) {
-    html += '<tr><td><div class="cell-row"><span class="avatar">' + initials(p.first_name, p.last_name) + '</span>' +
-        '<div class="cell-stack"><span class="cell-main">' + escHtml(p.first_name) + ' ' + escHtml(p.last_name) + '</span>' +
+    const key = leadKey(p);
+    const open = _leadOpen === key;
+    html += '<tr class="lead-row' + (open ? ' on' : '') + '" tabindex="0" ' +
+        'onclick="toggleLead(' + jsq(key) + ')" ' +
+        'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();toggleLead(' + jsq(key) + ')}" ' +
+        'aria-expanded="' + open + '">' +
+      '<td>' + leadPill(p.fit_label, p.fit_tone) + '</td>' +
+      '<td>' + leadPill(p.intent_label, p.intent_tone) + '</td>' +
+      '<td><div class="cell-row"><span class="avatar">' + initials(p.first_name, p.last_name) + '</span>' +
+        '<div class="cell-stack"><span class="cell-main">' + escHtml(p.name || '(no name)') + '</span>' +
         '<span class="cell-sub">' + escHtml(p.title) + '</span></div></div></td>' +
-      '<td>' + escHtml(p.company) + '</td>' +
+      '<td><div class="cell-stack"><span class="cell-main">' + escHtml(p.company) + '</span>' +
+        '<span class="cell-sub" title="' + escHtml(p.segment_label || p.segment) + '">' +
+        escHtml([p.segment_short || p.segment_label,
+          p.employees ? Number(p.employees).toLocaleString() + ' staff' : ''
+        ].filter(Boolean).join(' · ')) + '</span></div></td>' +
       '<td><div class="cell-stack"><span>' + escHtml(p.email) + '</span>' +
-        '<span class="cell-sub">' + [emailTag(p).trim(), p.phone ? escHtml(p.phone) +
-          (p.phone_verified ? ' <span class="verified" title="Phone verified">&#10003;</span>' : '') : '']
-          .filter(Boolean).join(' · ') + '</span>' +
-        '</div></td>' +
-      '<td>' + (p.score || p.score === 0 ? meterHtml(p.score) : '') + '</td>' +
-      '<td>' + badge(p.status) + '</td>' +
-      '<td class="muted">' + sourceLabel(p.source) + '</td>' +
-      '<td class="muted" style="white-space:nowrap">' + relTime(p.created_at) + '</td>' +
-      '<td><div class="cell-row">' + (p.status === 'opted_out' || p.opt_out_undone || _optOut.id === p.id
-        ? '<button class="btn btn-ghost btn-sm" onclick="toggleOptOut(' + i + ')" ' +
-          'aria-expanded="' + (_optOut.id === p.id) + '" title="What made Sellbird stop emailing them">' +
-          (p.status === 'opted_out' ? 'Why?' : 'Opt-out history') + '</button>' : '') +
-        '<button class="btn btn-ghost btn-sm row-action" onclick="fbProspect(' + i + ')" ' +
-        'title="Leave feedback on this contact">Feedback</button></div></td></tr>';
-    if (_optOut.id === p.id) html += '<tr class="detail-row"><td colspan="8">' + optOutPanel(p) + '</td></tr>';
+        '<span class="cell-sub">' + emailTag(p).trim() + '</span></div></td>' +
+      '<td class="lead-angle"><span class="clamp">' + escHtml(p.angle) + '</span></td>' +
+      '<td class="lead-stands" title="' + escHtml(statusMeta(p.status).label) + '">' +
+        badge(p.status) + '</td></tr>';
+    if (open) html += '<tr class="detail-row"><td colspan="' + LEAD_COLS.length + '">' +
+      leadDossier(p, i) + '</td></tr>';
+    if (p.id && _optOut.id === p.id) html += '<tr class="detail-row"><td colspan="' +
+      LEAD_COLS.length + '">' + optOutPanel(p) + '</td></tr>';
   }
   rowsEl.innerHTML = html + '</tbody></table></div>' +
     '<div class="table-foot">' + rows.length + ' of ' + _prospects.length + ' contacts</div>';
+}
+
+function leadPill(label, tone) {
+  if (!label) return '<span class="muted">—</span>';
+  return '<span class="badge t-' + (tone || 'idle') + '">' + escHtml(label) + '</span>';
+}
+
+// Everything on one lead, in the order a person reads it: why they would
+// buy, then who they are, then what has been written, then where they stand.
+function leadDossier(p, i) {
+  const rows = pairs => {
+    const live = pairs.filter(x => x[1] !== '' && x[1] !== undefined && x[1] !== null);
+    if (!live.length) return '<p class="desc">Nothing recorded yet.</p>';
+    return '<dl class="lead-dl">' + live.map(x =>
+      '<dt>' + x[0] + '</dt><dd>' + x[1] + '</dd>').join('') + '</dl>';
+  };
+  const t = v => escHtml(v === undefined || v === null ? '' : String(v));
+  const link = safeHref(p.linkedin_url);
+  const check = p.check_label
+    ? '<span class="mini t-' + (p.check_tone || 'idle') + '">' + escHtml(p.check_label) + '</span>' +
+      (p.verify_notes ? ' ' + t(p.verify_notes) : '')
+    : '';
+  const why = rows([
+    ['Angle', t(p.angle)],
+    ['Why it fits', t(p.fit_reason)],
+    ['Buying signals', t(p.signals)],
+    ['Red flags', t(p.red_flags)],
+    ['Fact check', check],
+    ['Buying state', t(p.buying_label)],
+    ['Account tier', p.account_tier ? t(p.account_tier) + ' — worth two or three contacts' : ''],
+    ['Open roles', p.open_roles ? t(p.open_roles) + (p.hiring_roles ? ' · ' + t(p.hiring_roles) : '') : ''],
+    ['Tech stack', t(p.tech_stack)],
+  ]);
+  const who = rows([
+    ['Role', t([p.title, p.seniority].filter(Boolean).join(' · '))],
+    ['Company', t(p.company) + (p.domain ? ' · ' + t(p.domain) : '')],
+    ['Staff', p.employees ? t(Number(p.employees).toLocaleString()) : ''],
+    ['Industry', t(p.industry)],
+    ['Where', t(p.location)],
+    ['Email', p.email ? t(p.email) + emailTag(p) : 'none found'],
+    ['Phone', p.phone ? t(p.phone) + (p.phone_verified ? ' ✓' : '') : ''],
+    ['LinkedIn', link ? '<a href="' + link + '" target="_blank" rel="noopener noreferrer">Profile</a>' : ''],
+    ['Segment', t(p.segment_label || p.segment)],
+    ['Score', p.score ? meterHtml(p.score) + ' <span class="muted">' + Number(p.score) + '</span>' : ''],
+    ['Found', t(sourceLabel(p.source)) + (p.fetched_at ? ' · ' + t(relTime(p.fetched_at)) : '')],
+  ]);
+  const stands = rows([
+    ['Status', badge(p.status) + (p.in_pipeline ? '' : ' <span class="muted">fetched, never promoted</span>')],
+    ['Stage', p.stage ? badge(p.stage) : ''],
+    ['Emails sent', p.sent_count ? Number(p.sent_count) : ''],
+    ['Last touch', p.last_touch ? t(relTime(p.last_touch)) : ''],
+    ['Next send', p.next_send ? t(formatDate(p.next_send)) : ''],
+    // personalization_notes is the angle, fit reason, signals and red flags
+    // squashed into one string for the Writer. Printing it under a panel
+    // that already shows all four is noise, so it only appears for a
+    // contact that has none of them.
+    ['Notes', (p.angle || p.fit_reason || p.signals) ? '' : t(p.notes)],
+  ]);
+  const draft = p.draft_subject || p.draft_body
+    ? '<div class="lead-block"><h4>First-touch draft <span class="muted">never sent from here</span></h4>' +
+      (p.draft_subject ? '<p class="lead-subject">' + t(p.draft_subject) + '</p>' : '') +
+      (p.draft_body ? '<div class="lead-draft">' + t(p.draft_body) + '</div>' : '') + '</div>'
+    : '';
+  const later = [['Call brief', p.call_brief], ['Call notes', p.call_notes],
+                 ['Deal check', p.deal_check], ['Proposal draft', p.proposal_draft]]
+    .filter(x => x[1]).map(x => '<div class="lead-block"><h4>' + x[0] + '</h4>' +
+      '<div class="lead-draft">' + t(x[1]) + '</div></div>').join('');
+  const acts = !p.id ? '' : '<div class="lead-acts">' +
+    (p.status === 'opted_out' || p.opt_out_undone || _optOut.id === p.id
+      ? '<button class="btn btn-secondary btn-sm" ' +
+        'onclick="event.stopPropagation();toggleOptOut(' + i + ')" ' +
+        'aria-expanded="' + (_optOut.id === p.id) + '">' +
+        (p.status === 'opted_out' ? 'Why did it stop emailing them?' : 'Opt-out history') +
+        '</button>' : '') +
+    '<button class="btn btn-secondary btn-sm" ' +
+      'onclick="event.stopPropagation();fbProspect(' + i + ')">' +
+      'Tell Sellbird something about them</button></div>';
+  return '<div class="lead-dossier">' +
+    '<div><h4>Why they would buy</h4>' + why + '</div>' +
+    '<div><h4>Who they are</h4>' + who + '</div>' +
+    '<div><h4>Where they stand</h4>' + stands + '</div>' +
+    '</div>' + draft + later + acts;
 }
 
 // Why someone is opted out, and undoing it. Sellbird never moves anyone off

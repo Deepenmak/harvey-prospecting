@@ -1360,6 +1360,83 @@ async def get_prospects():
     return rows
 
 
+@app.get("/api/leads")
+async def get_leads():
+    """Every lead, with everything known about it in the same row.
+
+    Apollo's record holds the judgement (fit, intent, buying state, the fact
+    check, the angle, the draft); the pipeline holds whether anyone has been
+    emailed. One tab should answer both, so they are joined here.
+
+    The record is the database. If the export files have gone thin while it
+    has not -- a redeploy with a fresh volume, a container stopped mid-write
+    -- they are rebuilt first, the same repair the Apollo tab makes, so the
+    tab is never emptier than what was really fetched.
+    """
+    from sellbird import fetch as fetch_module
+    from sellbird.lead_view import LeadStore, segment_labels, segments, summary
+
+    store = LeadStore(db_path=str(DB_PATH))
+    await store.init_db()
+    repaired = False
+    try:
+        if not await fetch_module.exports_in_sync(store):
+            repaired = bool(await fetch_module.reconcile(store))
+    except Exception as e:      # a tab must still open
+        logger.warning("Lead record not reconciled: %s", e)
+    try:
+        spec = fetch_module.load_segments()
+    except Exception as e:
+        logger.warning("segments.yaml could not be read: %s", e)
+        spec = {}
+    rows = await store.leads(segment_labels(spec))
+    return {
+        "rows": rows,
+        "summary": summary(rows, await store.credits_used()),
+        "segments": segments(rows, spec),
+        "repaired": repaired,
+    }
+
+
+@app.get("/api/export/leads.csv")
+async def export_leads():
+    """The lead view as a CSV: every judgement column, plus where each one
+    stands in the pipeline. What the Contacts tab shows, in a file."""
+    import csv
+    import io
+
+    from sellbird.fetch import CONTACT_COLUMNS
+    from sellbird.lead_view import LeadStore, segment_labels
+
+    extra = ["segment_label", "fit_label", "intent_label", "check_label",
+             "buying_label", "location", "in_pipeline", "stage", "last_touch",
+             "next_send", "sent_count", "notes"]
+    text = ""
+    try:
+        from sellbird import fetch as fetch_module
+
+        store = LeadStore(db_path=str(DB_PATH))
+        await store.init_db()
+        try:
+            spec = fetch_module.load_segments()
+        except Exception:
+            spec = {}
+        rows = await store.leads(segment_labels(spec))
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=CONTACT_COLUMNS + extra,
+                                extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+        text = buf.getvalue()
+    except Exception as e:
+        logger.warning("Lead export failed: %s", e)
+    return PlainTextResponse(
+        text,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
+    )
+
+
 def _state():
     from sellbird.state import StateManager
     return StateManager(db_path=str(DB_PATH))

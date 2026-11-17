@@ -189,8 +189,19 @@ def test_the_files_being_whole_is_not_treated_as_a_repair(store):
     assert await_sync_needed(store) is True
 
 
-def test_an_empty_database_asks_for_no_repair(store):
+def test_an_empty_workspace_asks_for_no_repair(store):
     assert await_sync_needed(store) is True
+
+
+def test_an_empty_database_beside_full_files_does_ask_for_a_repair(store):
+    """The upgrade case, and the one this check used to miss: the tables are
+    new, the files hold 2 contacts, and answering "in sync" meant a dashboard
+    opened before the first heartbeat showed nothing at all.
+    """
+    fetch.save_contacts([contact("a1"), contact("a2")],
+                        fetch.CONTACTS_FILE, fetch.EMAIL_CONTACTS_FILE)
+    assert run(store.contact_count()) == 0
+    assert await_sync_needed(store) is False
 
 
 # ── An install that predates the tables ──────────────────────────────

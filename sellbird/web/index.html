@@ -258,14 +258,17 @@
 
 <div id="prospects" class="section">
   <div class="section-head">
-    <div><h2>Contacts</h2><p>People Sellbird has found, how sure it is of their address, and where each one stands.</p></div>
+    <div><h2>Contacts</h2><p>Every lead Sellbird has, why they would buy, and where each one stands. Click a row for the whole story.</p></div>
     <div class="page-actions">
       <button class="btn btn-secondary btn-sm" onclick="openImportContacts()"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add contacts</button>
-      <button class="btn btn-secondary btn-sm" onclick="downloadCsv('/api/export/prospects.csv', 'prospects.csv', this)"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Export deliverable</button>
+      <button class="btn btn-secondary btn-sm" onclick="downloadCsv('/api/export/leads.csv', 'leads.csv', this)" title="Every lead with its fit, research, fact check and draft"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Export leads</button>
+      <button class="btn btn-secondary btn-sm" onclick="downloadCsv('/api/export/prospects.csv', 'prospects.csv', this)" title="Deliverable addresses only, ready for a sequencer">Export deliverable</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadCsv('/api/export/prospects.csv?all=true', 'prospects-all.csv', this)">Export all</button>
     </div>
   </div>
+  <div id="lead-stats"></div>
   <div id="prospects-table"></div>
+  <div id="lead-segments"></div>
 </div>
 
 <dialog id="import-dialog" class="modal" aria-labelledby="import-dialog-title"></dialog>
