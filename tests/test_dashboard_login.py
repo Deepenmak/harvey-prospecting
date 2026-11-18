@@ -404,7 +404,9 @@ def test_both_ways_in_are_on_the_locked_screen():
 def test_the_master_token_works_whatever_the_password_is_doing(client, env, monkeypatch):
     monkeypatch.setenv("DASHBOARD_PASS_HASH", "scrypt1")   # mangled in transit
     monkeypatch.delenv("DASHBOARD_PASS", raising=False)
-    assert sign_in(client).status_code == 401              # no password works
+    # No password gets in: the hash is unreadable and there is no plain one,
+    # so the sign-in reports itself unconfigured rather than wrong.
+    assert sign_in(client).status_code == 503
     assert client.get("/api/sending-mode",
                       headers={"Authorization": f"Bearer {env['token']}"}).status_code == 200
 
@@ -453,3 +455,59 @@ def test_only_the_sign_in_keys_can_be_read_this_way():
     """It is not a general back door into the environment."""
     with pytest.raises(ValueError):
         dash.login_setting("APOLLO_HARVEY_KEY")
+
+
+# ── A redeploy has to land somewhere usable ──
+
+
+def test_a_hash_that_lost_a_piece_falls_back_to_the_password(client, monkeypatch):
+    """An unreadable hash carries no intent: it is a value that lost a piece
+    between the host's settings and this process. Treating it as the final
+    word locks the operator out of their own dashboard with nothing to go on,
+    so the password they also set is used, and the reason is logged."""
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", "scrypt1")
+    monkeypatch.setenv("DASHBOARD_PASS", PASSWORD)
+    assert sign_in(client).status_code == 200
+    assert dash.hash_is_usable() is False
+    assert "field(s) instead of 6" in dash.secret_problem()
+
+
+def test_a_readable_hash_is_still_the_only_thing_consulted(client, monkeypatch):
+    """Otherwise moving to a hash and forgetting to clear the plain value
+    would leave the weaker of the two working."""
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", sessions.hash_password("the-real-one"))
+    monkeypatch.setenv("DASHBOARD_PASS", PASSWORD)
+    assert sign_in(client, password=PASSWORD).status_code == 401
+    assert sign_in(client, password="the-real-one").status_code == 200
+
+
+def test_an_unusable_hash_alone_is_not_called_configured(client, monkeypatch):
+    """The page asks this to decide whether to offer a sign-in. Offering one
+    that cannot possibly succeed, and hiding the token box behind it, is how
+    someone ends up with no way in at all."""
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", "scrypt1")
+    monkeypatch.delenv("DASHBOARD_PASS", raising=False)
+    assert dash.login_configured() is False
+    assert client.get("/api/instance").json()["login_enabled"] is False
+    assert sign_in(client).status_code == 503
+
+
+@pytest.mark.parametrize("value, usable", [
+    ("", True),                                     # nothing set is not a fault
+    ("scrypt1", False),
+    ("scrypt.16384.8.1.zz.zz", False),
+    ("my-actual-password", False),
+])
+def test_whether_a_stored_hash_can_be_used(monkeypatch, value, usable):
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", value)
+    assert dash.hash_is_usable() is usable
+
+
+def test_the_old_dollar_hash_counts_as_usable(monkeypatch):
+    """It works; it is only the newer form that avoids the '$' in the first
+    place. An install carrying one must not be told it is broken."""
+    good = sessions.hash_password(PASSWORD)
+    fields = good.split(".")
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", "$".join(fields))
+    assert dash.hash_is_usable() is True
+    assert dash.login_configured() is True

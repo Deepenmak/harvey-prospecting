@@ -3653,10 +3653,18 @@ def login_source(name: str) -> str:
 
 
 def login_configured() -> bool:
-    """Whether a username and some form of password are set."""
+    """Whether a username and a usable password are set.
+
+    A hash that can't be read doesn't count, even though it is set: the page
+    asks this to decide whether to offer a sign-in, and offering one that
+    cannot possibly succeed is how someone ends up with no way in at all.
+    """
     user = login_setting("DASHBOARD_USER")
-    secret = login_setting("DASHBOARD_PASS_HASH") or login_setting("DASHBOARD_PASS")
-    return bool(user and secret)
+    if not user:
+        return False
+    if login_setting("DASHBOARD_PASS"):
+        return True
+    return bool(login_setting("DASHBOARD_PASS_HASH")) and hash_is_usable()
 
 
 def credential_mark() -> str:
@@ -3674,17 +3682,45 @@ def credential_mark() -> str:
         "" if hashed else login_setting("DASHBOARD_PASS"))
 
 
+def secret_problem() -> str:
+    """What is wrong with the stored password hash, or ''.
+
+    Separate from checking a password, because this is the answer to "it is
+    set and it does not work": a hash that lost a piece on its way into the
+    container is not a wrong password, and saying so is the difference
+    between a fix and an afternoon.
+    """
+    hashed = login_setting("DASHBOARD_PASS_HASH")
+    return sessions.describe_secret(hashed) if hashed else ""
+
+
+def hash_is_usable() -> bool:
+    note = secret_problem()
+    # describe_secret also comments on a hash that works but is in the older
+    # "$" form; that one is usable, so only a real fault counts here.
+    return not note or "older" in note
+
+
 def _password_ok(given: str) -> bool:
     """Check a password against DASHBOARD_PASS_HASH, else DASHBOARD_PASS.
 
-    A hash is preferred: the stored value is then useless to whoever can read
-    the deployment's environment. Only one is ever in play, so a hash that
-    does not verify is a failure and never falls back to the plain value.
+    A readable hash is the only thing consulted, even if a plain password is
+    also set: otherwise moving to a hash and forgetting to clear the plain
+    value would leave the weaker of the two still working.
+
+    An *unreadable* hash is different. It carries no intent -- it is a value
+    that lost a piece between the host's settings and this process -- and
+    treating it as the final word locks the operator out of their own
+    dashboard with nothing to go on. So the plain password is used instead,
+    and the reason is logged every time.
     """
     import hmac as _hmac
     hashed = login_setting("DASHBOARD_PASS_HASH")
-    if hashed:
+    if hashed and hash_is_usable():
         return sessions.verify_password(given, hashed)
+    if hashed:
+        logger.warning("DASHBOARD_PASS_HASH can't be read, so it is being ignored: %s",
+                       secret_problem())
     plain = login_setting("DASHBOARD_PASS")
     if not plain:
         return False
@@ -3927,11 +3963,26 @@ def start_dashboard(host: str = "127.0.0.1", port: int = 5555):
         raise DashboardSetupError(str(e)) from e
 
     cloud_host = (os.getenv("SELLBIRD_CLOUD_HOST") or "").strip()
-    if cloud_host and not login_configured():
-        print("\n  SELLBIRD_CLOUD_HOST is set, so this listens on every interface,")
-        print("  but no sign-in is configured. Set DASHBOARD_USER and")
-        print("  DASHBOARD_PASS_HASH (sellbird password-hash) and redeploy, or nobody")
-        print("  can get in but whoever holds the token file.")
+    if cloud_host:
+        # Printed on every boot, so the deployment's own log answers "why
+        # won't it let me in" without anyone opening a terminal.
+        problem = secret_problem()
+        if problem and not hash_is_usable():
+            print("\n  DASHBOARD_PASS_HASH is set but can't be used:")
+            print(f"    {problem}")
+            print("  Set DASHBOARD_PASS to your password instead (nothing can mangle")
+            print("  that), or run 'sellbird password-hash' again for a fresh value.")
+        elif not login_configured():
+            print("\n  SELLBIRD_CLOUD_HOST is set, so this listens on every interface,")
+            print("  but no sign-in is configured. Set DASHBOARD_USER and DASHBOARD_PASS")
+            print("  on the deployment and redeploy.")
+        else:
+            user = login_setting("DASHBOARD_USER")
+            kind = ("a hashed password" if login_setting("DASHBOARD_PASS_HASH")
+                    and hash_is_usable() else "a password")
+            print(f"\n  Sign in at https://{cloud_host}/login as {user!r}, with {kind}.")
+            if problem:
+                print(f"  Note: {problem}")
     print(f"\n  Sellbird Dashboard running. Open this link to unlock it:\n\n    {url}\n")
     print(f"  The token is stored in {token_store.path} (owner-only). Keep the link")
     print("  private; anyone with it can use the dashboard. Press Ctrl+C to stop.\n")

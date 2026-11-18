@@ -28,16 +28,21 @@ not how anyone reaches it. Set three environment variables on the deployment:
 ```
 SELLBIRD_CLOUD_HOST=sellbird.example.com     # your hostname, no protocol, no slash
 DASHBOARD_USER=<the name you sign in with>
-DASHBOARD_PASS_HASH=<from: sellbird password-hash>
+DASHBOARD_PASS=<the password you want>       # or DASHBOARD_PASS_HASH, below
 ```
 
-Run `sellbird password-hash` on your own machine, type the password twice, and
-paste the printed `DASHBOARD_PASS_HASH` value. It contains no `$`, on purpose:
-docker compose, `.env` files and most hosting UIs read `$16384` as a variable
-reference, and a hash that arrives with pieces missing just looks like a
-password that doesn't work. If a sign-in refuses you, run `sellbird login-check`
-in a terminal on the server — it reads the same environment the dashboard does
-and says which cause it is. The password itself then never
+Set `DASHBOARD_PASS` to the password you want and you are done. Nothing along
+the way can alter it, and the boot log names the sign-in URL and username it
+will accept.
+
+`DASHBOARD_PASS_HASH` is the better of the two once the plain one works, because
+the value sitting in the host's configuration is then no use to whoever reads
+it: run `sellbird password-hash` on your own machine and paste the result. It
+contains no `$` on purpose — docker compose, `.env` files and most hosting UIs
+read `$16384` as a variable reference, so an older hash could arrive with pieces
+missing. If that happens, the hash is ignored, `DASHBOARD_PASS` is used instead,
+and the boot log says exactly what was wrong with it. `sellbird login-check` on
+the server reports the same thing on demand. The password itself then never
 sits in the host's configuration, where anyone with access to the deployment
 can read it.
 
