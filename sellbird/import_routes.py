@@ -19,6 +19,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from sellbird.background import jobs
 from sellbird import apollo_ops, import_service
 from sellbird.import_staging import MAX_TEXT_BYTES, StagingError
 from sellbird.import_store import ImportStore
@@ -107,7 +108,8 @@ async def create_import(request: Request):
     # instant and free, and a model call is neither.
     brain = _brain(store)
     if brain is not None:
-        _analysis_tasks.append(asyncio.create_task(
+        _analysis_tasks.append(jobs.start(
+            "import-analysis",
             import_service.analyse_batch(store, result["batch_id"], brain)))
         _analysis_tasks[:] = [t for t in _analysis_tasks if not t.done()]
     else:
@@ -222,7 +224,7 @@ async def enrich_import(batch_id: str, request: Request):
             _run_state.update(state="failed",
                               message=f"Enrichment failed: {type(e).__name__}")
 
-    _run_task = asyncio.create_task(_go())
+    _run_task = jobs.start("apollo", _go())
     return {"success": True, "started": True, "op": op_key,
             "max_credits": max_credits}
 
@@ -428,5 +430,5 @@ async def find_candidates(request: Request):
             _run_state.update(state="failed",
                               message=f"The search failed: {type(e).__name__}")
 
-    _run_task = asyncio.create_task(_go())
+    _run_task = jobs.start("apollo", _go())
     return {"success": True, "started": True, "segment": segment, "limit": limit}

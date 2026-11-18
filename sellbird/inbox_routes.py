@@ -21,6 +21,7 @@ import re
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from sellbird.background import jobs
 from sellbird.mailboxes import (
     HARD_MAX_INBOX_CAP, MAIN, ConnectRefused, MailboxStore, build_provider,
     check_provider_allows_inboxes, connect_oauth_mailbox, connect_smtp_mailbox, load_inboxes,
@@ -388,7 +389,8 @@ async def connect_main_mailbox():
     address = (getattr(config.persona, "email", "") or "").strip().lower()
     _connect_job.clear()
     _connect_job.update(state="waiting", kind=provider, address=address, message="")
-    _connect_task = asyncio.create_task(_run_main_connect(provider, address))
+    _connect_task = jobs.start("mailbox-connect",
+                               _run_main_connect(provider, address))
     return {"success": True, "started": True, "kind": provider}
 
 
@@ -416,7 +418,8 @@ async def connect_inbox(kind: str, request: Request):
                        "five minutes for it to time out.", 409)
     _connect_job.clear()
     _connect_job.update(state="waiting", kind=kind, address=address, message="")
-    _connect_task = asyncio.create_task(_run_oauth_connect(kind, address, name, warmup))
+    _connect_task = jobs.start("mailbox-connect",
+                               _run_oauth_connect(kind, address, name, warmup))
     return {"success": True, "started": True}
 
 

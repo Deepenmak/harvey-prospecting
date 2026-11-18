@@ -169,5 +169,8 @@ def test_the_contact_list_flags_an_undone_opt_out(client):
     _seed(client.db_path)
     _sql(client.db_path, "INSERT INTO prospects (id, first_name, email, status) VALUES ('p2', 'Ben', 'b@x.test', 'new')")
     assert client.post("/api/prospects/p1/opt-out/undo", json={"confirm": True}).status_code == 200
-    flags = {p["id"]: p["opt_out_undone"] for p in client.get("/api/prospects").json()}
+    listed = client.get("/api/prospects").json()
+    # A page, and it says so: total and truncated come back beside the rows.
+    assert listed["total"] == listed["returned"] and listed["truncated"] is False
+    flags = {p["id"]: p["opt_out_undone"] for p in listed["prospects"]}
     assert flags == {"p1": True, "p2": False}

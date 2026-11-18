@@ -252,9 +252,17 @@ def build_server(client_factory: Callable[[], CoreClient] = default_client, *,
         return await read("/api/campaigns")
 
     @server.tool()
-    async def prospects_list() -> dict:
-        """The newest prospects (up to 200) with their status and email verification."""
-        return await read("/api/prospects")
+    async def prospects_list(limit: int = 500, offset: int = 0, search: str = "") -> dict:
+        """Prospects, newest first, with status and email verification.
+
+        One page at a time: ``total`` is how many match in all and
+        ``truncated`` says whether more follow, so a count is never read off
+        a slice. ``search`` matches a name, company or address.
+        """
+        query = f"limit={int(limit)}&offset={int(offset)}"
+        if search:
+            query += f"&search={quote(str(search))}"
+        return await read(f"/api/prospects?{query}")
 
     @server.tool()
     async def companies_list() -> dict:

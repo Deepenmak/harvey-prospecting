@@ -1,6 +1,7 @@
 """Sellbird Dashboard — local web UI to set up, control, and monitor Sellbird."""
 
 import asyncio
+from contextlib import asynccontextmanager
 import ipaddress
 import json
 import logging
@@ -20,15 +21,18 @@ import aiosqlite
 import yaml
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     HTMLResponse, JSONResponse, PlainTextResponse, Response,
 )
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware import Middleware
 from starlette.routing import Mount
 
 logger = logging.getLogger("sellbird.dashboard")
 
 from sellbird import agent_policy  # noqa: E402
+from sellbird.background import jobs  # noqa: E402
 from sellbird import dashboard_auth as auth  # noqa: E402
 from sellbird import sessions  # noqa: E402
 from sellbird.paths import PACKAGE_ROOT, PROJECT_ROOT, is_checkout  # noqa: E402
@@ -98,9 +102,115 @@ class home_middleware:
 app.add_middleware(home_middleware)
 
 
+# ── Stopping ──
+#
+# A request can start work that outlives it (an enrichment, a writer pass, a
+# sign-in). Until this, a container stop dropped them silently, which for a
+# job that spends credits is the worst way to end: the money is gone and the
+# row recording it was never written. They are now asked to stop, waited on
+# briefly, and whatever was running is named in the log.
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    interrupted = await jobs.shutdown()
+    if interrupted:
+        logger.warning("Dashboard stopped. Check these before trusting their results: %s",
+                       ", ".join(interrupted))
+
+
+app.router.lifespan_context = _lifespan
+
+
 @app.exception_handler(NotOnHosted)
 async def _not_on_hosted(request: Request, exc: NotOnHosted):
     return JSONResponse(exc.payload, status_code=409)
+
+
+# ── One shape for every error ──
+#
+# Three used to come back from this API: the guard's {error, message}, a
+# route's {success: false, message}, and FastAPI's {detail} from an
+# HTTPException. The page had to understand all three. Worse, an unhandled
+# exception came back as plain text, which the page could only read as "the
+# dashboard is not answering" -- so a bug in one route looked exactly like a
+# stopped server, and the operator went looking in the wrong place.
+#
+# Everything now carries {error, message}. Action routes keep success: false
+# beside it, because the page tells "refused" from "failed" by that flag and
+# not by the status code.
+
+def fail(message: str, *, code: str = "error", status: int = 400, **extra):
+    """An HTTP error in the shape every other one uses.
+
+    ``error`` is for a program, ``message`` is for the person reading the
+    page, ``success: false`` is what the page checks before showing a toast,
+    and ``detail`` keeps anything written against FastAPI's default working.
+
+    A route that answers 200 with an ``error`` field is a different thing --
+    "I answered, and here is what went wrong with part of it" -- and is left
+    alone.
+    """
+    return JSONResponse({"error": code, "message": message, "success": False,
+                         "detail": message, **extra}, status_code=status)
+
+
+def broke(where: str, exc: Exception, *, message: str, status: int = 500):
+    """A failure whose cause belongs in the log, not in the reply.
+
+    The text of an exception can carry a path, a query or a key, so the
+    caller gets a sentence and a reference and the log gets the rest under
+    the same reference.
+    """
+    ref = uuid.uuid4().hex[:8]
+    logger.exception("%s failed (%s): %s", where, ref, exc)
+    return fail(f"{message} The dashboard's log has the details, marked {ref}.",
+                code="internal", status=status, reference=ref)
+
+
+_ERROR_CODES = {
+    400: "bad_request", 401: "unauthorized", 403: "forbidden",
+    404: "not_found", 405: "method_not_allowed", 409: "conflict",
+    413: "too_large", 415: "unsupported_media_type", 422: "bad_request",
+    429: "too_many_attempts", 503: "unavailable",
+}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request: Request, exc: StarletteHTTPException):
+    detail = exc.detail if isinstance(exc.detail, str) and exc.detail else "Request refused."
+    return JSONResponse(
+        {"error": _ERROR_CODES.get(exc.status_code, "error"),
+         "message": detail, "success": False, "detail": detail},
+        status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    """A request the route's own signature refused. The fields are no use to
+    anyone reading the page, and naming them leaks the shape of the API."""
+    logger.info("Rejected %s %s: %s", request.method, request.url.path, exc.errors())
+    message = "That request didn't carry what this needs."
+    return JSONResponse({"error": "bad_request", "message": message,
+                         "success": False, "detail": message}, status_code=422)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request: Request, exc: Exception):
+    """A bug, not a refusal.
+
+    The reply carries a short reference and the log line carries the same one
+    with the traceback, so a report ("it said ref 7f3a9c21") can be matched
+    to the cause without asking anyone to read a stack trace, and without
+    putting one in front of them. The exception's own text is never returned:
+    it can hold a path, a query or a key.
+    """
+    ref = uuid.uuid4().hex[:8]
+    logger.exception("Unhandled error %s on %s %s", ref, request.method, request.url.path)
+    return JSONResponse(
+        {"error": "internal", "success": False, "reference": ref,
+         "message": f"Something broke handling that request. The dashboard's log "
+                    f"has the details, marked {ref}."},
+        status_code=500)
 
 # Sellbird process tracking
 _sellbird_process: subprocess.Popen | None = None
@@ -628,7 +738,7 @@ async def get_working_hours():
     try:
         config = load_config(str(_resolve_config_file()))
     except Exception as e:
-        return JSONResponse({"error": f"Couldn't read your config: {e}"}, status_code=500)
+        return broke("Reading the config", e, message="Couldn't read your config file.")
     quiet = config.usage.quiet_hours
     window = send_window_of(config)
     zone, problem = resolve_timezone(quiet.timezone)
@@ -815,7 +925,7 @@ async def get_offer():
     try:
         return offer_view(load_config())
     except Exception as e:
-        return JSONResponse({"error": f"Couldn't read your config: {e}"}, status_code=500)
+        return broke("Reading the offer", e, message="Couldn't read your config file.")
 
 
 @app.post("/api/offer/suggest")
@@ -827,11 +937,11 @@ async def suggest_offer():
         ideas = await suggest_offers(brain, config)
     except Exception as e:
         logger.warning(f"Offer suggestions failed: {e}")
-        return JSONResponse({"error": "Sellbird couldn't come up with offers just now. Try again."},
-                            status_code=502)
+        return fail("Sellbird couldn't come up with offers just now. Try again.",
+                    code="brain_unavailable", status=502)
     if not ideas:
-        return JSONResponse({"error": "Sellbird couldn't come up with offers just now. Try again."},
-                            status_code=502)
+        return fail("Sellbird couldn't come up with offers just now. Try again.",
+                    code="brain_unavailable", status=502)
     return {"ideas": ideas}
 
 
@@ -886,7 +996,7 @@ async def get_company():
         proposed = json.loads(raw) if raw else None
         return company_view(load_config(), PROJECT_ROOT, proposed)
     except Exception as e:
-        return JSONResponse({"error": f"Couldn't read your config: {e}"}, status_code=500)
+        return broke("Reading Your company", e, message="Couldn't read your config file.")
 
 
 @app.post("/api/company")
@@ -1071,7 +1181,7 @@ async def get_company_profile(company_id: str):
     Sellbird observed on its site (latest value per signal, with the page)."""
     rows = await query_db("SELECT * FROM companies WHERE id = ?", (company_id,))
     if not rows:
-        return JSONResponse({"error": "not found"}, status_code=404)
+        return fail("That company isn't in the register.", code="not_found", status=404)
     observations = await query_db(
         "SELECT o.signal_code, o.value_text, o.value_num, o.evidence_url, o.observed_at, "
         "COALESCE(s.label, o.signal_code) AS label FROM observations o "
@@ -1482,16 +1592,57 @@ async def get_usage():
     }
 
 
+PROSPECT_PAGE = 500          # rows one request returns by default
+PROSPECT_PAGE_MAX = 5000     # the most a caller may ask for at once
+
+
 @app.get("/api/prospects")
-async def get_prospects():
-    rows = await query_db("SELECT * FROM prospects ORDER BY created_at DESC LIMIT 200")
+async def get_prospects(limit: int = PROSPECT_PAGE, offset: int = 0, search: str = ""):
+    """Contacts as rows, newest first, saying how many there are in all.
+
+    This was a bare ``LIMIT 200`` with nothing said about it, so past the
+    200th contact the rest did not exist as far as any caller could tell --
+    and the caller is usually the coding agent, which would then reason about
+    "every prospect" from a slice it had no way to notice it was given. A page
+    is still a page; it now says that it is one.
+
+    ``total`` counts every matching row, ``truncated`` says whether more
+    follow this page, and ``search`` matches a name, company or address.
+    """
+    try:
+        limit = max(1, min(int(limit), PROSPECT_PAGE_MAX))
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        limit, offset = PROSPECT_PAGE, 0
+    term = str(search or "").strip()[:120]
+
+    where, params = "", []
+    if term:
+        where = ("WHERE email LIKE ? OR first_name LIKE ? OR last_name LIKE ? "
+                 "OR company LIKE ?")
+        params = [f"%{term}%"] * 4
+
+    counted = await query_db(f"SELECT COUNT(*) AS n FROM prospects {where}", tuple(params))
+    if not isinstance(counted, list):
+        return counted                     # query_db's {"error": ...}
+    total = int(counted[0].get("n") or 0) if counted else 0
+
+    rows = await query_db(
+        f"SELECT * FROM prospects {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset))
+    if not isinstance(rows, list):
+        return rows
+
     # Someone whose opt-out was undone keeps a way to see what happened.
     undone = {r["pid"] for r in await query_db(
         "SELECT DISTINCT json_extract(details_json, '$.prospect_id') AS pid FROM actions "
         "WHERE action_type = 'opt_out_undone' AND json_valid(details_json)")}
     for r in rows:
         r["opt_out_undone"] = r.get("id") in undone
-    return rows
+    return {"prospects": rows, "returned": len(rows), "total": total,
+            "offset": offset, "limit": limit,
+            "truncated": offset + len(rows) < total,
+            "search": term}
 
 
 @app.get("/api/leads")
@@ -1694,7 +1845,8 @@ async def get_sending_mode():
     try:
         config = load_config(str(path))
     except Exception as e:
-        return JSONResponse({"error": f"Couldn't read {path.name}: {e}"}, status_code=500)
+        return broke(f"Reading {path.name}", e,
+                     message=f"Couldn't read {path.name}.")
     state = _state()
     await state.init_db()
     return {
@@ -2405,13 +2557,13 @@ async def estimate_discovery(request: Request):
         body = await request.json()
         provider = body.get("provider") or ""
         if provider not in PROVIDERS:
-            return JSONResponse({"error": f"unknown provider {provider!r}"},
-                                status_code=400)
+            return fail(f"There is no discovery provider called {provider!r}.",
+                        code="bad_request")
 
         try:
             queries = _discovery_queries(body, load_config())
         except ValueError as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+            return fail(str(e), code="bad_request")
         return {
             "provider": provider,
             "queries": [q.keyword() for q in queries],
@@ -2420,7 +2572,8 @@ async def estimate_discovery(request: Request):
             "free": PROVIDERS[provider].estimate(queries) == 0,
         }
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return broke("Estimating a discovery run", e,
+                     message="Couldn't work out what that run would cost, so nothing ran.")
 
 
 @app.post("/api/discover/run")
@@ -2480,7 +2633,7 @@ async def start_discovery(request: Request):
                 _discovery_report = {"errors": [str(exc)], "stopped": "failed"}
 
         _discovery_report = None
-        _discovery_task = asyncio.create_task(_go())
+        _discovery_task = jobs.start("discovery", _go())
         return {"success": True, "queries": len(queries)}
     except Exception as e:
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
@@ -2527,7 +2680,7 @@ async def start_profile():
         global _discovery_kind
         _discovery_kind = "profile"
         _discovery_report = None
-        _discovery_task = asyncio.create_task(_go())
+        _discovery_task = jobs.start("discovery", _go())
         return {"success": True, "pending": pending}
     except Exception as e:
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
@@ -2601,7 +2754,7 @@ async def start_writer():
                                   "error": str(exc)}
 
         _writer_report = None
-        _writer_task = asyncio.create_task(_go())
+        _writer_task = jobs.start("writer", _go())
         return {"success": True}
     except Exception as e:
         logger.warning(f"Could not start a writing pass: {e}")
@@ -3310,9 +3463,10 @@ async def preview_cohort(request: Request):
         return {"size": size, "offset": offset, "limit": limit,
                 "companies": rows}
     except (ValueError, TypeError) as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return fail(str(e), code="bad_request")
     except Exception as e:
-        return JSONResponse({"size": 0, "companies": [], "error": str(e)}, status_code=500)
+        return broke("Counting a cohort", e, message="Couldn't count that cohort.",
+                     status=500)
 
 
 def _csv_cell(value):
@@ -3659,6 +3813,10 @@ def build_app(*, guard: Middleware | None = None, routers: Sequence[APIRouter] =
     new.user_middleware = [guard if guard is not None and m.cls is auth.DashboardGuard else m
                            for m in app.user_middleware]
     new.exception_handlers.update(app.exception_handlers)
+    # A mounted router's lifespan is never run by the app that mounts it, so
+    # the built app takes it over: otherwise a hosted server would stop
+    # without asking its background jobs to.
+    new.router.lifespan_context = app.router.lifespan_context
     return new
 
 
