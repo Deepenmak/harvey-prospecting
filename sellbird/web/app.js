@@ -1350,7 +1350,7 @@ function renderCohortBuilder() {
     confirmed.map(s =>
       '<label class="cohort-pick"><input type="checkbox" ' +
         (_cohort[key].has(s.code) ? 'checked ' : '') +
-        'onchange="toggleCohort(\'' + key + '\',' + jsq(s.code) + ',this.checked)">' +
+        'onchange="toggleCohort(' + jsq(key) + ',' + jsq(s.code) + ',this.checked)">' +
         '<span>' + escHtml(s.label || s.code) + '</span>' +
         '<span class="n">' + (s.companies || 0) + '</span></label>'
     ).join('') + '</div></div>';
@@ -1873,7 +1873,7 @@ async function loadImports() {
     '<th>Enriched</th><th>In pipeline</th><th>Credits</th><th>Status</th><th>Added</th></tr></thead><tbody>';
   for (const b of batches) {
     const c = b.counts || {};
-    html += '<tr style="cursor:pointer" onclick="openImport(\'' + b.id + '\')">' +
+    html += '<tr style="cursor:pointer" onclick="openImport(' + jsq(b.id) + ')">' +
       '<td><div class="cell-stack"><span class="cell-main">' + escHtml(b.name || 'pasted') + '</span>' +
         '<span class="cell-sub">' + escHtml(b.source || '') + '</span></div></td>' +
       '<td>' + Number(c.total || 0) + '</td>' +
@@ -1951,7 +1951,7 @@ async function loadImportBatch(id) {
           'you can see what it would cost.</p>' : '') +
       '<button class="btn ' + (op.danger ? 'btn-danger' : recommended ? 'btn-primary' : 'btn-secondary') +
         ' btn-sm"' + (op.eligible && op.available !== false ? '' : ' disabled') +
-        ' onclick="askEnrich(\'' + op.key + '\')">' +
+        ' onclick="askEnrich(' + jsq(op.key) + ')">' +
         (op.available === false ? 'Not available yet'
           : op.eligible ? 'Run this' : 'No rows qualify') + '</button></div>';
   }
@@ -2111,7 +2111,7 @@ async function askEnrich(opKey) {
               data.credits + '"><p class="desc">The run stops dead at this number, even mid-list.</p></div>') +
       '<p class="desc" id="enrich-result" role="status"></p></div>' +
     '<div class="modal-foot"><button class="btn btn-ghost" onclick="closeImportDialog()">Cancel</button>' +
-      '<button class="btn btn-primary" id="enrich-go" onclick="runEnrich(\'' + opKey + '\')">' +
+      '<button class="btn btn-primary" id="enrich-go" onclick="runEnrich(' + jsq(opKey) + ')">' +
       (free ? 'Run it' : 'Spend up to ' + data.credits + ' credits') + '</button></div>';
   if (!d.open) d.showModal();
 }
@@ -3183,7 +3183,7 @@ function renderContacts() {
   if (!rowsEl) return;
   filtersEl.innerHTML = CONTACT_FILTERS.map(f =>
     '<button class="' + (f[0] === _contactFilter ? 'on' : '') + '" aria-pressed="' +
-      (f[0] === _contactFilter) + '" onclick="setContactFilter(\'' + f[0] + '\')">' +
+      (f[0] === _contactFilter) + '" onclick="setContactFilter(' + jsq(f[0]) + ')">' +
       f[1] + ' <span class="n">' +
       _prospects.filter(p => contactMatches(p, f[0]) && leadMatches(p)).length +
       '</span></button>').join('');
@@ -3207,7 +3207,7 @@ function renderContacts() {
     '</colgroup><thead><tr>' +
     LEAD_COLS.map(c => '<th class="sortable"' +
       (_leadSort === c[0] ? ' aria-sort="' + (_leadDir === 1 ? 'ascending' : 'descending') + '"' : '') +
-      '><button type="button" onclick="sortLeads(\'' + c[0] + '\')">' + c[1] +
+      '><button type="button" onclick="sortLeads(' + jsq(c[0]) + ')">' + c[1] +
       (_leadSort === c[0] ? arrow : '') + '</button></th>').join('') +
     '</tr></thead><tbody>';
   for (const [p, i] of rows) {
@@ -3630,7 +3630,7 @@ function renderConversations() {
   const filter = CONVO_FILTERS.find(f => f[0] === _convoFilter) || CONVO_FILTERS[CONVO_FILTERS.length - 1];
   const bar = '<div class="toolbar"><div class="segmented" role="group" aria-label="Filter conversations">' +
     CONVO_FILTERS.map(f => '<button class="' + (f[0] === filter[0] ? 'on' : '') + '" aria-pressed="' + (f[0] === filter[0]) +
-      '" onclick="setConvoFilter(\'' + f[0] + '\')">' + f[1] + ' <span class="n">' +
+      '" onclick="setConvoFilter(' + jsq(f[0]) + ')">' + f[1] + ' <span class="n">' +
       _convos.filter(f[2]).length + '</span></button>').join('') + '</div></div>';
   // Handed-to-you first, then drafts waiting; otherwise newest first (as served).
   const rank = c => c.status === 'needs_human' ? 0 : c.draft ? 1 : 2;
@@ -3877,7 +3877,7 @@ function openInbox(i) {
       const can = (_inboxes.can_connect || {})[kind];
       body = '<div id="main-status"></div>' + (can
         ? '<div class="notice bad"><b>Not connected.</b> Sign in to the mailbox Sellbird sends from.</div>' +
-          '<button class="btn btn-primary" id="main-go" onclick="connectMainMailbox(\'' + kind + '\')">Sign in with ' +
+          '<button class="btn btn-primary" id="main-go" onclick="connectMainMailbox(' + jsq(kind) + ')">Sign in with ' +
           (kind === 'gmail' ? 'Google' : 'Microsoft') + '</button><div style="height:16px"></div>'
         : connectSetupNotice(kind)) + body.replace(/<div class="notice bad"><b>Not connected.<\/b>[\s\S]*?<\/div>/, '');
     }
@@ -3956,7 +3956,7 @@ function openAddInbox(kind) {
   if (kind) _addKind = kind;
   const can = (_inboxes && _inboxes.can_connect) || {};
   const picks = Object.keys(INBOX_KINDS).map(k =>
-    '<button class="provider-pick' + (k === _addKind ? ' on' : '') + '" onclick="openAddInbox(\'' + k + '\')" aria-pressed="' + (k === _addKind) + '">' +
+    '<button class="provider-pick' + (k === _addKind ? ' on' : '') + '" onclick="openAddInbox(' + jsq(k) + ')" aria-pressed="' + (k === _addKind) + '">' +
     '<b>' + INBOX_KINDS[k][0] + '</b><span>' + INBOX_KINDS[k][1] + '</span></button>').join('');
   let form = '<div class="form-group"><label class="form-label" for="add-address">Email address</label>' +
     '<input class="form-input" id="add-address" type="email" autocomplete="off" placeholder="you@yourdomain.com" oninput="updateAddCommand()"></div>' +
@@ -4042,7 +4042,7 @@ function connectSetupNotice(kind) {
   const problem = ((_inboxes && _inboxes.connect_problems) || {})[kind] || '';
   return '<div class="notice info"><b>' + escHtml(problem) + '</b>' +
     '<ol class="setup-steps">' + setup.steps.map(t => '<li>' + t + '</li>').join('') + '</ol>' +
-    '<button class="btn btn-secondary btn-sm" onclick="openSettingsAt(\'' + setup.field + '\')">Open Settings</button></div>';
+    '<button class="btn btn-secondary btn-sm" onclick="openSettingsAt(' + jsq(setup.field) + ')">Open Settings</button></div>';
 }
 
 function openSettingsAt(fieldId) {

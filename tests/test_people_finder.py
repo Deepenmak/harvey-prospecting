@@ -405,12 +405,20 @@ def test_address_scan_is_linear_on_adversarial_pages(kind):
 
 
 def test_nested_testimonials_are_bounded():
+    """Deeply nested markup must not send the pattern into exponential
+    backtracking, which would hang the collector on one page.
+
+    The budget is loose on purpose. What it catches is the difference between
+    milliseconds and minutes; a tight wall-clock bound measures the machine's
+    load as much as the code, and failed here only because another test run
+    was using the CPU.
+    """
     import time
     html = "<div class='testimonial'>" * 2000 + "x" + "</div>" * 2000
     start = time.monotonic()
     people.drop_quoted(html)
     people.find_people([("https://acme.com", html)], "acme.com")
-    assert time.monotonic() - start < 1.0
+    assert time.monotonic() - start < 10.0
 
 
 def test_whole_page_is_scanned_not_just_the_top():

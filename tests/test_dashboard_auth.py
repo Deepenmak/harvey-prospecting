@@ -881,3 +881,22 @@ def test_app_js_only_talks_to_the_api_through_authfetch():
     assert "localStorage.setItem('sellbird-dashboard" not in app
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert "downloadCsv('/api/export/prospects.csv'" in html
+
+
+def test_no_handler_splices_a_value_into_a_js_string_by_hand():
+    """Every onclick/onchange built in app.js quotes its argument with jsq().
+
+    The dashboard's CSP has to allow 'unsafe-inline' for scripts, because the
+    whole UI is written with inline handlers. That makes the escaping the only
+    thing between text scraped off a prospect's website and running code, so
+    the one risky shape is banned outright: fn(\'' + value + '\'), which
+    splices a value into a JS string literal and breaks the moment the value
+    holds a quote. jsq() JSON-quotes and then HTML-escapes, which doesn't.
+    """
+    src = (WEB / "app.js").read_text(encoding="utf-8")
+    splice = "\\" + "'" + "' + "
+    assert splice not in src, (
+        "a handler argument is spliced into a JS string by hand; use jsq(value)")
+    # And the sinks that take a URL go through safeHref, which only passes
+    # http(s) and escapes what it passes.
+    assert 'href="\' + escHtml(' not in src

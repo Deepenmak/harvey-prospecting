@@ -109,13 +109,17 @@ app.add_middleware(home_middleware)
 # job that spends credits is the worst way to end: the money is gone and the
 # row recording it was never written. They are now asked to stop, waited on
 # briefly, and whatever was running is named in the log.
+# FastAPI merges this with the router's own lifespan (its merged_lifespan), so
+# anything an extension registers there still runs; this only adds to it.
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    yield
-    interrupted = await jobs.shutdown()
-    if interrupted:
-        logger.warning("Dashboard stopped. Check these before trusting their results: %s",
-                       ", ".join(interrupted))
+    try:
+        yield
+    finally:
+        interrupted = await jobs.shutdown()
+        if interrupted:
+            logger.warning("Dashboard stopped. Check these before trusting their "
+                           "results: %s", ", ".join(interrupted))
 
 
 app.router.lifespan_context = _lifespan
