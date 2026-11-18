@@ -18,7 +18,14 @@
 
 **The dashboard password doesn't work** — Run `sellbird login-check` in a terminal on the server (Coolify: **Terminal** on the resource). It reads the same environment the dashboard reads and says which of the look-alike causes it is: the variable never arrived, the hash was altered on the way in, the username differs, or nothing is configured at all. `sellbird login-check --password` also checks a password against what is set. It prints no secret. Note that `sellbird password-hash` now prints a hash with no `$` in it — a `$` is read as a variable reference by docker compose, `.env` files and most hosting UIs, so an older hash could arrive with pieces missing; the older form is still accepted, including the `$$` form one round of escaping leaves behind.
 
-**Locked out of the dashboard completely** — The master token still works and no password can disable it. In a terminal on the server, `cat data/dashboard-token` (on a container deployment, `/config/data/dashboard-token`) and paste it into the dashboard's unlock box. Then fix the sign-in with `sellbird login-check`.
+**Locked out of the dashboard completely** — The master token still works and no password or deployment setting can disable it. In a terminal on the server, `cat /config/data/dashboard-token`, then open `https://<your-host>/#token=<that value>`. That gets you straight in without the sign-in page; the token is taken out of the address bar as the page loads. The locked screen also always offers a box to paste it into. Then fix the sign-in with `sellbird login-check`.
+
+**Setting the sign-in without the host's settings** — `DASHBOARD_USER`, `DASHBOARD_PASS_HASH` and `DASHBOARD_PASS` are read from the environment **or** from `.env` on the data volume (`/config/.env`), environment first. A value in `.env` skips the host's UI, its variable substitution and the compose file, takes effect immediately with no redeploy, and cannot be rewritten on the way in:
+
+```sh
+echo 'DASHBOARD_USER=you' >> /config/.env
+echo 'DASHBOARD_PASS_HASH=<from: sellbird password-hash>' >> /config/.env
+```
 
 **"Too many failed sign-ins"** — Five wrong passwords from one address, or twenty-five in all, stop sign-in for fifteen minutes; the reply says how long. It stops the right password too, on purpose. Waiting is the only way through: restarting the container clears the count, but if you can restart it you can also read `DASHBOARD_USER`.
 

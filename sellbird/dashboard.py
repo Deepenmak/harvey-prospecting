@@ -3606,11 +3606,56 @@ async def login_page():
 # sign-out that ends it without touching anyone else's.
 
 
+LOGIN_KEYS = ("DASHBOARD_USER", "DASHBOARD_PASS_HASH", "DASHBOARD_PASS")
+
+
+def login_setting(name: str) -> str:
+    """A sign-in value, from the environment or from .env on the volume.
+
+    The environment is a host's own plumbing and not always a faithful one:
+    a value has to survive that host's UI, its variable substitution and a
+    compose file to arrive intact, and when it doesn't the only symptom is a
+    password that stops working with nothing to show why.
+
+    So .env on the data volume is a first-class place to put these, read
+    fresh on each use. The environment still wins where both are set, because
+    that is what the host's own settings are for; .env fills the gaps, can be
+    written from a terminal on the box in one line, and needs no redeploy.
+    """
+    if name not in LOGIN_KEYS:
+        raise ValueError(name)
+    live = (os.getenv(name) or "").strip()
+    if live:
+        return live
+    try:
+        for line in ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            if key.strip() != name:
+                continue
+            value = value.strip()
+            # Accept the quoting a person would naturally use by hand.
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            return value.strip()
+    except OSError:
+        pass
+    return ""
+
+
+def login_source(name: str) -> str:
+    """Where login_setting found it: 'environment', '.env' or ''."""
+    if (os.getenv(name) or "").strip():
+        return "environment"
+    return ".env" if login_setting(name) else ""
+
+
 def login_configured() -> bool:
     """Whether a username and some form of password are set."""
-    user = (os.getenv("DASHBOARD_USER") or "").strip()
-    secret = ((os.getenv("DASHBOARD_PASS_HASH") or "").strip()
-              or (os.getenv("DASHBOARD_PASS") or "").strip())
+    user = login_setting("DASHBOARD_USER")
+    secret = login_setting("DASHBOARD_PASS_HASH") or login_setting("DASHBOARD_PASS")
     return bool(user and secret)
 
 
@@ -3623,11 +3668,10 @@ def credential_mark() -> str:
     away: change the password, and they are out -- with nobody having to
     remember to revoke a session.
     """
+    hashed = login_setting("DASHBOARD_PASS_HASH")
     return sessions.credential_fingerprint(
-        (os.getenv("DASHBOARD_USER") or "").strip(),
-        (os.getenv("DASHBOARD_PASS_HASH") or "").strip(),
-        (os.getenv("DASHBOARD_PASS") or "").strip() if not
-        (os.getenv("DASHBOARD_PASS_HASH") or "").strip() else "")
+        login_setting("DASHBOARD_USER"), hashed,
+        "" if hashed else login_setting("DASHBOARD_PASS"))
 
 
 def _password_ok(given: str) -> bool:
@@ -3638,10 +3682,10 @@ def _password_ok(given: str) -> bool:
     does not verify is a failure and never falls back to the plain value.
     """
     import hmac as _hmac
-    hashed = (os.getenv("DASHBOARD_PASS_HASH") or "").strip()
+    hashed = login_setting("DASHBOARD_PASS_HASH")
     if hashed:
         return sessions.verify_password(given, hashed)
-    plain = (os.getenv("DASHBOARD_PASS") or "").strip()
+    plain = login_setting("DASHBOARD_PASS")
     if not plain:
         return False
     return _hmac.compare_digest(given.encode("utf-8"), plain.encode("utf-8"))
@@ -3681,7 +3725,7 @@ def browser_name(user_agent: str) -> str:
 
 @app.post("/api/auth/login")
 async def api_auth_login(request: Request):
-    username = (os.getenv("DASHBOARD_USER") or "").strip()
+    username = login_setting("DASHBOARD_USER")
     if not login_configured():
         return JSONResponse(
             {"error": "not_configured",
@@ -3750,7 +3794,7 @@ async def api_auth_me(request: Request):
         "principal": getattr(request.state, "principal", None),
         "kind": "session" if session else "token",
         "login_enabled": login_configured(),
-        "hashed_password": bool((os.getenv("DASHBOARD_PASS_HASH") or "").strip()),
+        "hashed_password": bool(login_setting("DASHBOARD_PASS_HASH")),
     }
     if session:
         out["session"] = {"id": session.get("id", ""),

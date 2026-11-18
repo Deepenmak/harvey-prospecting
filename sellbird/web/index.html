@@ -56,10 +56,14 @@
   <div class="card" style="max-width:500px;width:100%">
     <h2>Dashboard locked</h2>
     <p class="lede" id="lock-reason" role="alert"></p>
+    <div id="lock-login-way" style="display:none">
+      <p class="lede">Sign in to carry on. You will come back to the tab you were on.</p>
+      <button class="btn btn-primary" onclick="goSignIn()">Sign in</button>
+    </div>
     <div id="lock-token-way">
-      <p class="lede">Open the link that <code>sellbird dashboard</code> printed in your terminal,
-        or run <code>sellbird dashboard --url</code> to print it again. You can also paste the
-        token from <code>data/dashboard-token</code>.</p>
+      <p class="lede">Or use the dashboard token, which no password or deployment setting
+        can disable. Run <code>sellbird dashboard --url</code> to print the link again, or
+        read it from <code>data/dashboard-token</code> on the server and paste it here.</p>
       <form onsubmit="unlockWithToken(event)" class="form-row">
         <div class="form-group" style="margin-bottom:0">
           <label class="form-label" for="lock-token">Dashboard token</label>
@@ -67,10 +71,6 @@
         </div>
         <button class="btn btn-primary" type="submit">Unlock</button>
       </form>
-    </div>
-    <div id="lock-login-way" style="display:none">
-      <p class="lede">Sign in again to carry on. You will come back to the tab you were on.</p>
-      <button class="btn btn-primary" onclick="goSignIn()">Sign in</button>
     </div>
   </div>
 </div>

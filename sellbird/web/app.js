@@ -355,17 +355,9 @@ async function lockIfRefused(r) {
     if (r.ok && _locked) hideLock();
     return false;
   }
-  if (r.status === 401) {
-    const mode = _authMode || await loadAuthMode();
-    if (mode && mode.login_enabled) {
-      // The sign-in ran out or was revoked. Drop the dead token first, or the
-      // sign-in page would see it, believe us, and send us straight back.
-      _locked = true;
-      clearAuthToken();
-      goSignIn();
-      return true;
-    }
-  }
+  // Which way in to offer, fetched once: a page load can refuse several
+  // requests at once and each one must not ask again.
+  if (r.status === 401 && _authMode === null) await loadAuthMode();
   let why = '';
   if (r.status === 503) {
     try { why = ((await r.json()) || {}).message || ''; } catch { /* ignore */ }
@@ -456,15 +448,22 @@ async function loadSignedInAs() {
   el.style.display = me && me.kind === 'session' ? '' : 'none';
 }
 
+// Both ways in are always on this screen.
+//
+// It used to send a refused request straight to /login whenever a password
+// sign-in was configured, and hide the token box while it was. That read
+// well until the password itself was the broken thing -- a hash mangled on
+// its way into the container, say -- and then the screen offered only the
+// door that didn't open, and cleared the stored token on the way past. The
+// token is the credential that cannot be broken by a deployment's settings,
+// so it is never the one taken away.
 function showLock(reason) {
   _locked = true;
   const el = document.getElementById('lock-screen');
   if (!el) return;
   document.getElementById('lock-reason').textContent = reason;
   const byPassword = !!(_authMode && _authMode.login_enabled);
-  const tokenWay = document.getElementById('lock-token-way');
   const loginWay = document.getElementById('lock-login-way');
-  if (tokenWay) tokenWay.style.display = byPassword ? 'none' : '';
   if (loginWay) loginWay.style.display = byPassword ? '' : 'none';
   el.style.display = 'flex';
   const dot = document.getElementById('header-dot');

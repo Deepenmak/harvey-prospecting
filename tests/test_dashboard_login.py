@@ -9,6 +9,7 @@ master token is never one of the things it can give away.
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -368,3 +369,87 @@ def test_the_stored_label_is_the_name_and_not_the_user_agent(client, env):
                       headers={"Authorization": f"Bearer {env['token']}"}).json()["sessions"]
     assert [r["label"] for r in rows] == ["Chrome"]
     assert "Mozilla" not in json.dumps(rows)
+
+
+# ── Being locked out must always have a way back ──
+
+
+def test_a_broken_password_does_not_hide_the_token_box():
+    """The dashboard token is the credential a deployment's settings cannot
+    break. The locked screen used to hide it whenever a password sign-in was
+    configured and send the browser to /login instead -- which left exactly
+    one door offered, and it was the broken one, when a mangled hash was the
+    thing that went wrong."""
+    app_js = (Path(__file__).resolve().parent.parent
+              / "sellbird" / "web" / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("async function lockIfRefused(")
+    end = app_js.index(chr(10) + "}" + chr(10), start)   # that function alone
+    lock = app_js[start:end]
+    # No redirect to the sign-in page from a refused request...
+    assert "goSignIn()" not in lock
+    # ...and the stored token is never thrown away on the way past.
+    assert "clearAuthToken()" not in lock
+    # The token box has no display toggle any more; only the sign-in button does.
+    assert "lock-token-way" not in app_js
+
+
+def test_both_ways_in_are_on_the_locked_screen():
+    html = (Path(__file__).resolve().parent.parent
+            / "sellbird" / "web" / "index.html").read_text(encoding="utf-8")
+    lock = html[html.index('id="lock-screen"'):html.index('<div class="app">')]
+    assert 'id="lock-token"' in lock and "unlockWithToken" in lock
+    assert 'id="lock-login-way"' in lock and "goSignIn()" in lock
+
+
+def test_the_master_token_works_whatever_the_password_is_doing(client, env, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", "scrypt1")   # mangled in transit
+    monkeypatch.delenv("DASHBOARD_PASS", raising=False)
+    assert sign_in(client).status_code == 401              # no password works
+    assert client.get("/api/sending-mode",
+                      headers={"Authorization": f"Bearer {env['token']}"}).status_code == 200
+
+
+# ── The credential can live on the volume ──
+
+
+def test_a_credential_in_the_env_file_is_used(client, env, monkeypatch):
+    """A value has to survive the host's UI, its variable substitution and a
+    compose file to reach the process. .env on the data volume skips all of
+    it, is written in one line from a terminal, and needs no redeploy."""
+    monkeypatch.delenv("DASHBOARD_USER", raising=False)
+    monkeypatch.delenv("DASHBOARD_PASS", raising=False)
+    monkeypatch.delenv("DASHBOARD_PASS_HASH", raising=False)
+    dash.ENV_FILE.write_text(
+        "DASHBOARD_USER=fromfile\n"
+        f"DASHBOARD_PASS_HASH={sessions.hash_password('file-password-here')}\n",
+        encoding="utf-8")
+    assert dash.login_configured() is True
+    assert dash.login_source("DASHBOARD_USER") == ".env"
+    r = sign_in(client, "fromfile", "file-password-here")
+    assert r.status_code == 200
+
+
+def test_the_environment_wins_over_the_env_file(client, env, monkeypatch):
+    """The host's own settings are what they are for; .env fills gaps."""
+    dash.ENV_FILE.write_text("DASHBOARD_USER=fromfile\n", encoding="utf-8")
+    monkeypatch.setenv("DASHBOARD_USER", "fromenv")
+    assert dash.login_setting("DASHBOARD_USER") == "fromenv"
+    assert dash.login_source("DASHBOARD_USER") == "environment"
+
+
+def test_a_quoted_or_padded_value_in_the_env_file_still_reads(monkeypatch):
+    monkeypatch.delenv("DASHBOARD_USER", raising=False)
+    dash.ENV_FILE.write_text('  DASHBOARD_USER = "quoted"  \n', encoding="utf-8")
+    assert dash.login_setting("DASHBOARD_USER") == "quoted"
+
+
+def test_a_missing_env_file_is_not_an_error(client, env, monkeypatch):
+    monkeypatch.delenv("DASHBOARD_USER", raising=False)
+    dash.ENV_FILE.unlink(missing_ok=True)
+    assert dash.login_setting("DASHBOARD_USER") == ""
+
+
+def test_only_the_sign_in_keys_can_be_read_this_way():
+    """It is not a general back door into the environment."""
+    with pytest.raises(ValueError):
+        dash.login_setting("APOLLO_HARVEY_KEY")

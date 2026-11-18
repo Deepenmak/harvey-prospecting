@@ -258,19 +258,29 @@ def cmd_login_check(args):
     """
     import os
 
+    from sellbird.dashboard import ENV_FILE, login_setting, login_source
     from sellbird.sessions import describe_secret, verify_password
 
-    user = (os.getenv("DASHBOARD_USER") or "").strip()
-    hashed = (os.getenv("DASHBOARD_PASS_HASH") or "").strip()
-    plain = (os.getenv("DASHBOARD_PASS") or "").strip()
+    # The same two places, in the same order, as the dashboard reads them.
+    user = login_setting("DASHBOARD_USER")
+    hashed = login_setting("DASHBOARD_PASS_HASH")
+    plain = login_setting("DASHBOARD_PASS")
     cloud = (os.getenv("SELLBIRD_CLOUD_HOST") or "").strip()
+
+    def shown(name, value):
+        where = login_source(name)
+        if not value:
+            return "(not set)"
+        return f"set, {len(value)} characters, from {where}"
 
     print("\n  Dashboard sign-in, as this process sees it\n")
     print(f"    SELLBIRD_CLOUD_HOST   {cloud or '(not set: answers to localhost only)'}")
-    print(f"    DASHBOARD_USER        {user or '(not set)'}"
-          + (f"   [{len(user)} characters]" if user else ""))
-    print(f"    DASHBOARD_PASS_HASH   {'set, ' + str(len(hashed)) + ' characters' if hashed else '(not set)'}")
-    print(f"    DASHBOARD_PASS        {'set, ' + str(len(plain)) + ' characters' if plain else '(not set)'}")
+    print(f"    DASHBOARD_USER        "
+          + (f"{user}   [from {login_source('DASHBOARD_USER')}]" if user else "(not set)"))
+    print(f"    DASHBOARD_PASS_HASH   {shown('DASHBOARD_PASS_HASH', hashed)}")
+    print(f"    DASHBOARD_PASS        {shown('DASHBOARD_PASS', plain)}")
+    print(f"\n    Either place works. Checked: this process's environment, then")
+    print(f"    {ENV_FILE}")
 
     problems = []
     if not user:
@@ -329,6 +339,14 @@ def cmd_login_check(args):
     print("  limit may be engaged: five wrong tries from one address, or twenty-five")
     print("  in all, stop sign-in for fifteen minutes -- including correct ones. It is")
     print("  held in memory, so restarting this container clears it.")
+    if not user or not (hashed or plain):
+        print("\n  Either value can go in the file above instead of the host's own")
+        print("  settings. It is on the data volume and read fresh every time, so it")
+        print("  takes effect at once with no redeploy, and nothing can rewrite the")
+        print("  value on its way in:")
+        print("\n    sellbird password-hash          # on your own machine, copy the hash")
+        print(f"    echo 'DASHBOARD_USER=you'        >> {ENV_FILE}")
+        print(f"    echo 'DASHBOARD_PASS_HASH=...'   >> {ENV_FILE}")
     print("\n  Locked out entirely? The master token still works. Paste the contents")
     print("  of this file into the dashboard's unlock box:")
     from sellbird.paths import PROJECT_ROOT as _root

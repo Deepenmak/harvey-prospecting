@@ -55,6 +55,20 @@ would keep the weaker of the two set for good. To move off it:
 Until step 2 the plain value is unused but still readable in the deployment's
 settings, which is the whole reason to remove it.
 
+**Or put the credential on the volume instead.** These three are read from the
+environment **or** from `/config/.env`, environment first. A value in `.env`
+skips the host's UI, its variable substitution and this compose file entirely,
+takes effect with no redeploy, and cannot be rewritten on the way in:
+
+```sh
+echo 'DASHBOARD_USER=you' >> /config/.env
+echo 'DASHBOARD_PASS_HASH=<the hash>' >> /config/.env
+```
+
+**If you are locked out**, the dashboard token still works and nothing in the
+deployment's settings can disable it: `cat /config/data/dashboard-token`, then
+open `https://<your-host>/#token=<that value>`.
+
 Without `SELLBIRD_CLOUD_HOST` the dashboard answers only to `localhost` and
 the public URL returns `bad_host`. With it set and no sign-in configured, the
 port is open but nobody holding a browser can get in; the startup log says so.
