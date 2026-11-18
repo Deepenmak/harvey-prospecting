@@ -74,15 +74,22 @@ def test_a_public_hostname_never_ships_without_a_sign_in():
     env = service()["environment"]
     assert "SELLBIRD_CLOUD_HOST" in env
     assert "DASHBOARD_USER" in env
-    assert {"DASHBOARD_PASS", "DASHBOARD_PASS_HASH"} & set(env)
+    assert "DASHBOARD_PASS_HASH" in env
 
 
-def test_the_hashed_password_is_the_one_offered_first():
-    """Both are read, but the file should push people at the hash: a plain
-    password sits readable in the host's configuration forever."""
+def test_the_deployment_asks_for_the_hash_and_not_the_password():
+    """The plain password must not be named in this file.
+
+    Coolify pins every variable a compose file mentions and then refuses to
+    delete it, so naming DASHBOARD_PASS kept the weaker of the two set for
+    good -- which is exactly what moving to a hash is meant to end. The code
+    still reads it for a host install; the deployment does not offer it.
+    """
     text = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert text.index("DASHBOARD_PASS_HASH:") < text.index("DASHBOARD_PASS:")
-    assert "password-hash" in text
+    env = service()["environment"]
+    assert "DASHBOARD_PASS_HASH" in env
+    assert "DASHBOARD_PASS" not in env
+    assert "password-hash" in text          # says how to make the hash
 
 
 def test_no_environment_snapshot_masks_the_dashboard_settings():

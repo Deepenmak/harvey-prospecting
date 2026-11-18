@@ -100,7 +100,8 @@ def login(client: httpx.Client, base: str, user: str, password: str) -> str:
     if r.status_code == 401:
         sys.exit("  The dashboard refused that username and password.")
     if r.status_code == 503:
-        sys.exit("  That deployment has no DASHBOARD_USER / DASHBOARD_PASS set yet.")
+        sys.exit("  That deployment has no sign-in configured yet: set DASHBOARD_USER "
+                 "and DASHBOARD_PASS_HASH on it ('sellbird password-hash' makes the hash).")
     r.raise_for_status()
     token = (r.json() or {}).get("token")
     if not token:

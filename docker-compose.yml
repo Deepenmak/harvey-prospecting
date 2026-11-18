@@ -20,13 +20,20 @@ services:
       SELLBIRD_CLOUD_HOST: ${SELLBIRD_CLOUD_HOST}
 
       # Dashboard sign-in. The app is on a public URL, so this is what stops
-      # strangers reading your pipeline. Prefer the hash: run
-      # 'sellbird password-hash' locally, paste the result here, and the
-      # password itself never sits in the deployment's environment.
-      # DASHBOARD_PASS is still read when no hash is set.
+      # strangers reading your pipeline.
+      #
+      # Run 'sellbird password-hash' on your own machine and paste the result
+      # as DASHBOARD_PASS_HASH. The password itself then never sits in the
+      # host's configuration, where anyone with access to the deployment can
+      # read it.
+      #
+      # DASHBOARD_PASS (the plain password) is deliberately NOT listed here.
+      # Coolify pins every variable this file mentions and refuses to let you
+      # delete it, so naming it would force the weaker of the two to stay set
+      # forever. The code still reads it, for a host install that has no
+      # Coolify to pin anything.
       DASHBOARD_USER: ${DASHBOARD_USER}
-      DASHBOARD_PASS_HASH: ${DASHBOARD_PASS_HASH:-}
-      DASHBOARD_PASS: ${DASHBOARD_PASS:-}
+      DASHBOARD_PASS_HASH: ${DASHBOARD_PASS_HASH}
 
       # ── API keys ─────────────────────────────────────────────────────────
       # Optional here: all of these can also be typed into the dashboard's

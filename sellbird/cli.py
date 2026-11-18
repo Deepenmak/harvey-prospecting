@@ -239,8 +239,9 @@ def cmd_password_hash(args):
     print("\n  Set these two on the server (Coolify: Environment Variables), then redeploy:\n")
     print("    DASHBOARD_USER=<the name you want to sign in with>")
     print(f"    DASHBOARD_PASS_HASH={value}\n")
-    print("  Remove DASHBOARD_PASS once this works: while it is set it is only used")
-    print("  if DASHBOARD_PASS_HASH is missing, but it is still readable there.\n")
+    print("  Then delete DASHBOARD_PASS. While a hash is set the plain password is")
+    print("  never used, but it stays readable to anyone who can open the deployment's")
+    print("  settings. The compose file does not name it, so nothing pins it.\n")
 
 
 def cmd_status(args):

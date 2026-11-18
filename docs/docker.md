@@ -34,8 +34,21 @@ DASHBOARD_PASS_HASH=<from: sellbird password-hash>
 Run `sellbird password-hash` on your own machine, type the password twice, and
 paste the printed `DASHBOARD_PASS_HASH` value. The password itself then never
 sits in the host's configuration, where anyone with access to the deployment
-can read it. `DASHBOARD_PASS` (the plain password) still works and is read
-only when no hash is set — remove it once the hash works.
+can read it.
+
+`DASHBOARD_PASS` (the plain password) is read only when no hash is set, and
+**the compose file deliberately doesn't name it**: Coolify pins every variable
+a compose file mentions and then refuses to let you delete it, so naming it
+would keep the weaker of the two set for good. To move off it:
+
+1. Add `DASHBOARD_PASS_HASH` and redeploy. A hash always wins over the plain
+   password, so sign in once to confirm the new one works — you will be asked
+   to, because changing the credential ends the old sessions.
+2. Redeploy on a version of this file that doesn't name `DASHBOARD_PASS`.
+   Coolify will then let you delete the variable.
+
+Until step 2 the plain value is unused but still readable in the deployment's
+settings, which is the whole reason to remove it.
 
 Without `SELLBIRD_CLOUD_HOST` the dashboard answers only to `localhost` and
 the public URL returns `bad_host`. With it set and no sign-in configured, the
