@@ -56,16 +56,22 @@
   <div class="card" style="max-width:500px;width:100%">
     <h2>Dashboard locked</h2>
     <p class="lede" id="lock-reason" role="alert"></p>
-    <p class="lede">Open the link that <code>sellbird dashboard</code> printed in your terminal,
-      or run <code>sellbird dashboard --url</code> to print it again. You can also paste the
-      token from <code>data/dashboard-token</code>, or <a href="/login">sign in with username and password →</a></p>
-    <form onsubmit="unlockWithToken(event)" class="form-row">
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label" for="lock-token">Dashboard token</label>
-        <input type="password" class="form-input" id="lock-token" autocomplete="off" spellcheck="false">
-      </div>
-      <button class="btn btn-primary" type="submit">Unlock</button>
-    </form>
+    <div id="lock-token-way">
+      <p class="lede">Open the link that <code>sellbird dashboard</code> printed in your terminal,
+        or run <code>sellbird dashboard --url</code> to print it again. You can also paste the
+        token from <code>data/dashboard-token</code>.</p>
+      <form onsubmit="unlockWithToken(event)" class="form-row">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label" for="lock-token">Dashboard token</label>
+          <input type="password" class="form-input" id="lock-token" autocomplete="off" spellcheck="false">
+        </div>
+        <button class="btn btn-primary" type="submit">Unlock</button>
+      </form>
+    </div>
+    <div id="lock-login-way" style="display:none">
+      <p class="lede">Sign in again to carry on. You will come back to the tab you were on.</p>
+      <button class="btn btn-primary" onclick="goSignIn()">Sign in</button>
+    </div>
   </div>
 </div>
 
@@ -80,28 +86,28 @@
   <nav aria-label="Sections">
     <div class="nav-group">
       <div class="nav-label">Work</div>
-      <button class="active" onclick="showTab('today', this)"><svg class="icon" aria-hidden="true"><use href="#i-today"/></svg><span class="label">Today</span><span class="nav-count" id="nav-today"></span></button>
-      <button onclick="showTab('company', this)"><svg class="icon" aria-hidden="true"><use href="#i-company"/></svg><span class="label">Your company</span><span class="nav-count" id="nav-company"></span></button>
-      <button onclick="showTab('outbox', this)"><svg class="icon" aria-hidden="true"><use href="#i-outbox"/></svg><span class="label">Outbox</span><span class="nav-count" id="nav-outbox"></span></button>
-      <button onclick="showTab('inboxes', this)"><svg class="icon" aria-hidden="true"><use href="#i-inboxes"/></svg><span class="label">Inboxes</span></button>
-      <button onclick="showTab('conversations', this)"><svg class="icon" aria-hidden="true"><use href="#i-conversations"/></svg><span class="label">Conversations</span><span class="nav-count" id="nav-conversations"></span></button>
+      <button class="active" data-tab="today"><svg class="icon" aria-hidden="true"><use href="#i-today"/></svg><span class="label">Today</span><span class="nav-count" id="nav-today"></span></button>
+      <button data-tab="company"><svg class="icon" aria-hidden="true"><use href="#i-company"/></svg><span class="label">Your company</span><span class="nav-count" id="nav-company"></span></button>
+      <button data-tab="outbox"><svg class="icon" aria-hidden="true"><use href="#i-outbox"/></svg><span class="label">Outbox</span><span class="nav-count" id="nav-outbox"></span></button>
+      <button data-tab="inboxes"><svg class="icon" aria-hidden="true"><use href="#i-inboxes"/></svg><span class="label">Inboxes</span></button>
+      <button data-tab="conversations"><svg class="icon" aria-hidden="true"><use href="#i-conversations"/></svg><span class="label">Conversations</span><span class="nav-count" id="nav-conversations"></span></button>
     </div>
     <div class="nav-group">
       <div class="nav-label">Pipeline</div>
-      <button onclick="showTab('signals', this)"><svg class="icon" aria-hidden="true"><use href="#i-signals"/></svg><span class="label">Signals</span><span class="nav-count" id="nav-signals"></span></button>
-      <button onclick="showTab('discover', this)"><svg class="icon" aria-hidden="true"><use href="#i-discover"/></svg><span class="label">Apollo</span></button>
-      <button onclick="showTab('companies', this)"><svg class="icon" aria-hidden="true"><use href="#i-companies"/></svg><span class="label">Companies</span></button>
-      <button onclick="showTab('imports', this)"><svg class="icon" aria-hidden="true"><use href="#i-imports"/></svg><span class="label">Imports</span><span class="nav-count" id="nav-imports"></span></button>
-      <button onclick="showTab('prospects', this)"><svg class="icon" aria-hidden="true"><use href="#i-contacts"/></svg><span class="label">Contacts</span></button>
-      <button onclick="showTab('campaigns', this)"><svg class="icon" aria-hidden="true"><use href="#i-campaigns"/></svg><span class="label">Campaigns</span></button>
+      <button data-tab="signals"><svg class="icon" aria-hidden="true"><use href="#i-signals"/></svg><span class="label">Signals</span><span class="nav-count" id="nav-signals"></span></button>
+      <button data-tab="discover"><svg class="icon" aria-hidden="true"><use href="#i-discover"/></svg><span class="label">Apollo</span></button>
+      <button data-tab="companies"><svg class="icon" aria-hidden="true"><use href="#i-companies"/></svg><span class="label">Companies</span></button>
+      <button data-tab="imports"><svg class="icon" aria-hidden="true"><use href="#i-imports"/></svg><span class="label">Imports</span><span class="nav-count" id="nav-imports"></span></button>
+      <button data-tab="prospects"><svg class="icon" aria-hidden="true"><use href="#i-contacts"/></svg><span class="label">Contacts</span></button>
+      <button data-tab="campaigns"><svg class="icon" aria-hidden="true"><use href="#i-campaigns"/></svg><span class="label">Campaigns</span></button>
     </div>
     <div class="nav-group">
       <div class="nav-label">System</div>
-      <button onclick="showTab('activity', this)"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span class="label">Activity</span></button>
-      <button onclick="showTab('usage', this)"><svg class="icon" aria-hidden="true"><use href="#i-usage"/></svg><span class="label">Usage</span></button>
-      <button onclick="showTab('controls', this)"><svg class="icon" aria-hidden="true"><use href="#i-controls"/></svg><span class="label">Controls</span></button>
-      <button onclick="showTab('settings', this)"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span class="label">Settings</span></button>
-      <button onclick="showTab('help', this)"><svg class="icon" aria-hidden="true"><use href="#i-help"/></svg><span class="label">Help</span></button>
+      <button data-tab="activity"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg><span class="label">Activity</span></button>
+      <button data-tab="usage"><svg class="icon" aria-hidden="true"><use href="#i-usage"/></svg><span class="label">Usage</span></button>
+      <button data-tab="controls"><svg class="icon" aria-hidden="true"><use href="#i-controls"/></svg><span class="label">Controls</span></button>
+      <button data-tab="settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span class="label">Settings</span></button>
+      <button data-tab="help"><svg class="icon" aria-hidden="true"><use href="#i-help"/></svg><span class="label">Help</span></button>
     </div>
   </nav>
 
@@ -118,6 +124,8 @@
       </div>
       <button class="refresh-btn" onclick="loadCurrentTab()" title="Refresh this page">
         <svg class="icon" style="width:13px;height:13px"><use href="#i-refresh"/></svg>Refresh</button>
+      <button class="refresh-btn" id="sign-out" style="display:none" onclick="signOut()"
+              title="End this sign-in on this computer">Sign out</button>
     </div>
   </div>
 </aside>

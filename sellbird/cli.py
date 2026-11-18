@@ -211,6 +211,38 @@ def cmd_dashboard(args):
         sys.exit(2)
 
 
+def cmd_password_hash(args):
+    """Turn a password into the value DASHBOARD_PASS_HASH takes.
+
+    The point is that the deployment's environment never holds the password
+    itself. The hash is useless to whoever can read it, and the password is
+    typed here rather than passed as an argument so it stays out of shell
+    history and the process list.
+    """
+    import getpass
+
+    from sellbird.sessions import hash_password, verify_password
+
+    password = getpass.getpass("  Dashboard password: ")
+    if not password:
+        print("  Nothing entered; no hash made.")
+        sys.exit(2)
+    if password != getpass.getpass("  Again: "):
+        print("  Those don't match; no hash made.")
+        sys.exit(2)
+    if len(password) < 12:
+        print("  That is under 12 characters. This is the only thing between the")
+        print("  internet and your pipeline, so use a longer one.")
+        sys.exit(2)
+    value = hash_password(password)
+    assert verify_password(password, value)   # never print a hash that can't be used
+    print("\n  Set these two on the server (Coolify: Environment Variables), then redeploy:\n")
+    print("    DASHBOARD_USER=<the name you want to sign in with>")
+    print(f"    DASHBOARD_PASS_HASH={value}\n")
+    print("  Remove DASHBOARD_PASS once this works: while it is set it is only used")
+    print("  if DASHBOARD_PASS_HASH is missing, but it is still readable there.\n")
+
+
 def cmd_status(args):
     """Show current pipeline status."""
     from sellbird.state import StateManager
@@ -1434,6 +1466,12 @@ def main():
     sub.add_argument("--url", action="store_true",
                      help="Print the unlock link (with its token) and exit")
     sub.set_defaults(func=cmd_dashboard)
+
+    # sellbird password-hash
+    sub = subparsers.add_parser(
+        "password-hash",
+        help="Hash a dashboard password for DASHBOARD_PASS_HASH")
+    sub.set_defaults(func=cmd_password_hash)
 
     # sellbird status
     sub = subparsers.add_parser("status", help="Show pipeline status")

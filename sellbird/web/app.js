@@ -319,10 +319,43 @@ async function api(path, opts) {
 
 let _locked = false;
 
+// How this dashboard is unlocked: a token pasted from the terminal, or a
+// username and password. /api/instance is public and says which, so a
+// refused request can offer the right way in instead of guessing.
+let _authMode = null;
+
+async function loadAuthMode() {
+  try {
+    // authFetch, like everything else here: /api/instance needs no token,
+    // but the same-origin guard in authFetch is not worth stepping around.
+    const r = await authFetch('/api/instance');
+    if (r.ok) _authMode = await r.json();
+  } catch { /* null means "offer the token box", which is always safe */ }
+  return _authMode;
+}
+
+// Come back to the tab we were on, not to Today.
+function signInUrl() {
+  return '/login?next=' + encodeURIComponent(window.location.pathname + window.location.hash);
+}
+
+function goSignIn() { window.location.replace(signInUrl()); }
+
 async function lockIfRefused(r) {
   if (r.status !== 401 && r.status !== 503) {
     if (r.ok && _locked) hideLock();
     return false;
+  }
+  if (r.status === 401) {
+    const mode = _authMode || await loadAuthMode();
+    if (mode && mode.login_enabled) {
+      // The sign-in ran out or was revoked. Drop the dead token first, or the
+      // sign-in page would see it, believe us, and send us straight back.
+      _locked = true;
+      clearAuthToken();
+      goSignIn();
+      return true;
+    }
   }
   let why = '';
   if (r.status === 503) {
@@ -336,11 +369,34 @@ async function lockIfRefused(r) {
   return true;
 }
 
+// Ends this sign-in on the server, so the token is dead everywhere and not
+// just forgotten by this tab.
+async function signOut() {
+  try { await authFetch('/api/auth/logout', {method: 'POST'}); } catch { /* going anyway */ }
+  _locked = true;
+  clearAuthToken();
+  window.location.replace(_authMode && _authMode.login_enabled ? '/login' : '/');
+}
+
+// The Sign out button belongs to sign-ins only: a token pasted from the
+// terminal has nothing on the server to end.
+async function loadSignedInAs() {
+  const el = document.getElementById('sign-out');
+  if (!el) return;
+  const me = await api('/api/auth/me');
+  el.style.display = me && me.kind === 'session' ? '' : 'none';
+}
+
 function showLock(reason) {
   _locked = true;
   const el = document.getElementById('lock-screen');
   if (!el) return;
   document.getElementById('lock-reason').textContent = reason;
+  const byPassword = !!(_authMode && _authMode.login_enabled);
+  const tokenWay = document.getElementById('lock-token-way');
+  const loginWay = document.getElementById('lock-login-way');
+  if (tokenWay) tokenWay.style.display = byPassword ? 'none' : '';
+  if (loginWay) loginWay.style.display = byPassword ? '' : 'none';
   el.style.display = 'flex';
   const dot = document.getElementById('header-dot');
   const text = document.getElementById('header-status-text');
@@ -405,16 +461,94 @@ function toggleVisibility(inputId) {
   el.type = el.type === 'password' ? 'text' : 'password';
 }
 
-// ── Tabs ──
+// ── Tabs, as real routes ──
+//
+// Every tab has a URL: #/outbox can be bookmarked or pasted to someone,
+// Back and Forward move between the tabs you visited instead of leaving the
+// dashboard, and a reload keeps your place. A hash and not a path, so this
+// stays one static page the server never has to route.
 
-function showTab(id, btn) {
+const TABS = ['today', 'company', 'outbox', 'inboxes', 'conversations',
+              'signals', 'discover', 'companies', 'imports', 'prospects',
+              'campaigns', 'activity', 'usage', 'controls', 'settings', 'help'];
+
+// Where the internal id would read oddly in a link, the route says what the
+// tab is called in the sidebar. Both spellings are understood on the way in.
+const ROUTE_NAMES = {prospects: 'contacts', discover: 'apollo', company: 'your-company'};
+const TAB_NAMES = {};
+for (const id of TABS) {
+  TAB_NAMES[id] = id;
+  if (ROUTE_NAMES[id]) TAB_NAMES[ROUTE_NAMES[id]] = id;
+}
+
+function routeOf(id) { return own(ROUTE_NAMES, id) || id; }
+
+// The tab a hash asks for, or '' for anything unrecognised.
+function tabFromHash(hash) {
+  const name = String(hash || '').replace(/^#\/?/, '').split(/[?&#]/)[0].toLowerCase();
+  return own(TAB_NAMES, name) || '';
+}
+
+function navButton(id) {
+  return document.querySelector('nav button[data-tab="' + id + '"]');
+}
+
+function tabLabel(id) {
+  const btn = navButton(id);
+  const label = btn && btn.querySelector('.label');
+  return label ? label.textContent.trim() : '';
+}
+
+// opts.fromRouter: the URL already says this, don't touch history.
+// opts.replace:    replace the current entry instead of adding one.
+function showTab(id, btn, opts) {
+  if (!own(TAB_NAMES, id)) id = 'today';
   currentTab = id;
   if (id === 'companies') companyDrill = false;
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  if (btn) btn.classList.add('active');
+  document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.remove('active'));
+  const section = document.getElementById(id);
+  if (section) section.classList.add('active');
+  const button = btn || navButton(id);
+  if (button) button.classList.add('active');
+  const label = tabLabel(id);
+  document.title = label ? label + ' — Sellbird' : 'Sellbird';
+  if (!(opts && opts.fromRouter)) setRoute(id, opts && opts.replace);
   loadCurrentTab();
+}
+
+function setRoute(id, replace) {
+  const target = '#/' + routeOf(id);
+  if (window.location.hash === target) return;
+  try {
+    const state = {tab: id};
+    if (replace) history.replaceState(state, '', target);
+    else history.pushState(state, '', target);
+  } catch {
+    window.location.hash = target;   // private modes that refuse the History API
+  }
+}
+
+// Jump to a tab from a link that isn't itself a nav button.
+function goTab(id) { showTab(id); }
+
+// Back and Forward: the URL is the truth, so never write to history here.
+window.addEventListener('popstate', () => {
+  const id = tabFromHash(window.location.hash) || 'today';
+  showTab(id, null, {fromRouter: true});
+});
+
+// One listener for the whole sidebar: a nav button carries only its data-tab,
+// so nothing has to keep an inline handler and a selector in step.
+document.addEventListener('click', e => {
+  const btn = e.target.closest && e.target.closest('nav button[data-tab]');
+  if (btn) showTab(btn.dataset.tab, btn);
+});
+
+// Open on whatever the URL asks for, replacing the entry the browser already
+// has, so the first Back leaves the dashboard rather than bouncing in place.
+function startRouting() {
+  showTab(tabFromHash(window.location.hash) || 'today', null, {replace: true});
 }
 
 function loadCurrentTab() {
@@ -726,13 +860,6 @@ function navCount(id, n) {
   if (!el) return;
   el.textContent = n > 0 ? n : '';
   el.className = 'nav-count' + (n > 0 ? ' on' : '');
-}
-
-// Jump to a tab from a link that isn't itself a nav button.
-function goTab(id) {
-  const btns = [...document.querySelectorAll('nav button')];
-  const btn = btns.find(b => (b.getAttribute('onclick') || '').includes("'" + id + "'"));
-  showTab(id, btn);
 }
 
 async function loadRuns() {
@@ -1121,7 +1248,7 @@ async function pollCandidates() {
 
 function openStagedBatch(id) {
   if (id) _importBatch = id;
-  showTab('imports', document.querySelector('nav button[onclick*="imports"]'));
+  showTab('imports');
 }
 
 
@@ -1592,7 +1719,7 @@ async function importContacts(direct) {
     showToast(data.message || 'Staged', 'success');
     closeImportDialog();
     _importBatch = data.batch_id;
-    showTab('imports', document.querySelector('nav button[onclick*="imports"]'));
+    showTab('imports');
   } else {
     el.textContent = failMsg(data, 'Could not stage that file.');
     showToast(el.textContent, 'error');
@@ -3956,16 +4083,10 @@ async function loadActivity() {
 
 // ── Init & live refresh ──
 
-loadRenameNotice();
-loadToday();
-loadTrend();
-loadFunnel();
-loadSetupStatus();
-loadRuns();
-loadTodayActivity();
-loadSellbirdStatus();
-
-loadLiveStatus();
+loadAuthMode();        // which way in to offer if a request is refused
+startRouting();        // loads whichever tab the URL asks for
+loadSellbirdStatus();  // the header's running light, on every tab
+loadSignedInAs();      // shows Sign out when this is a sign-in, not a token
 
 // Agent status: quick poll (not while locked: it would only be refused)
 setInterval(() => { if (!_locked) loadSellbirdStatus(); }, 8000);

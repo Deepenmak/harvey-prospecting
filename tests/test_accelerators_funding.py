@@ -334,8 +334,12 @@ def test_cli_and_dashboard_take_the_presets():
     cli = (PROJECT_ROOT / "sellbird" / "cli.py").read_text(encoding="utf-8")
     choices = re.search(r'"--preset", default="", choices=\[([^\]]*)\]', cli).group(1)
     assert '"accelerator"' in choices and '"funding"' in choices
+    # Upstream also asserted the preset picker is on the Discover tab. This
+    # fork sources contacts from Apollo and has no Discover tab, so the
+    # presets are reached through 'sellbird discover' and POST /api/discover/run
+    # (both checked above) rather than from a <select> in the page.
     page = (PROJECT_ROOT / "sellbird" / "web" / "index.html").read_text(encoding="utf-8")
-    assert 'value="accelerator"' in page and 'value="funding"' in page
+    assert 'data-tab="discover"' in page and 'Apollo' in page
 
 
 def test_every_preset_checks_and_builds_whether_it_has_one_term_or_several():

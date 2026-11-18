@@ -422,7 +422,7 @@ global.fetch = async (url, opts) => {calls.push({url, auth: opts.headers.get('Au
   redirect: opts.redirect}); return {ok, status, blob: async () => ({})};};
 vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'));
 const app = fs.readFileSync(process.argv[2], 'utf8');
-vm.runInThisContext('let _locked = false;' + app.slice(app.indexOf('async function lockIfRefused('), app.indexOf('function showLock(')));
+vm.runInThisContext(app.slice(app.indexOf('let _locked = false;'), app.indexOf('function showLock(')));
 vm.runInThisContext("const _cohort = {require: new Set(['A']), exclude: new Set(['B'])};" +
  app.slice(app.indexOf('async function exportCohort('), app.indexOf('function pageCohort(')));
 (async () => {

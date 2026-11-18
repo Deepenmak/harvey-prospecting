@@ -101,8 +101,12 @@ def test_the_test_run_uses_the_checkout():
 # ── Docker ──
 
 def test_dockerfile_pins_home():
+    """This fork keeps the home on the data volume, not in the image: /app
+    is replaced by every redeploy and /config is not."""
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "SELLBIRD_HOME=/app" in text
+    assert "SELLBIRD_HOME=/config" in text
+    # The folders Sellbird writes into have to exist before it starts.
+    assert "/config/data" in text and "/config/exports" in text
 
 
 def test_docker_app_is_not_a_checkout_but_pinned_home_wins(tmp_path):
@@ -204,6 +208,10 @@ def test_cli_seeding_error_is_one_stderr_line_and_the_command_runs(capsys, tmp_p
     monkeypatch.setattr(home_mod, "seed_home", broken)
     monkeypatch.setattr(paths, "PROJECT_ROOT", tmp_path / "home")
     monkeypatch.setattr(home_mod, "bundled_defaults", lambda: None)
+    # The one stderr line under test is the seeding failure. A developer
+    # checkout that still holds a harvey.local.yaml would add a rename notice
+    # to it, so this asserts about the CLI rather than about one machine.
+    monkeypatch.setattr(cli, "_carry_over_from_harvey", lambda: None)
     ran = []
     monkeypatch.setattr(cli, "cmd_status", lambda args: ran.append(True))
     monkeypatch.setattr(sys, "argv", ["sellbird", "status"])

@@ -1,45 +1,93 @@
-# Running Sellbird with Docker (Linux)
+# Running Sellbird in a container
 
-Docker Compose runs the dashboard; start and stop the heartbeat from its
-Actions card. Host networking preserves the dashboard's loopback-only bind at
-`127.0.0.1:5555`. This Compose setup supports native Linux; use the pip install
-above on macOS or Windows. On a remote Linux host, reach the dashboard through
-an SSH tunnel rather than exposing its port to the network.
+This fork deploys to a container host (Coolify, or any Docker host behind a
+reverse proxy) rather than running on the operator's own machine. Everything
+private and everything stateful lives on one named volume mounted at
+`/config`, and the dashboard is reached over the network with a username and
+password. That is a different shape from upstream Sellbird's Compose setup,
+which uses host networking and a bind mount of the checkout; the notes for
+that are at the end.
 
-```bash
-git clone https://github.com/ethanplusai/sellbird.git
-cd sellbird
+## What lives where
 
-# Create the credentials file only if you do not already have one.
-test -e .env || cp .env.example .env
+| Path | Holds | Survives a redeploy |
+|---|---|---|
+| `/config` (volume) | `.env`, `sellbird.local.yaml`, `skills/`, `prompts/`, `exports/` | yes |
+| `/config/data` | `sellbird.db` — the lead record, the credit ledger, every run | yes |
+| `/config/.claude` | the Claude login (`CLAUDE_CONFIG_DIR` points here) | yes |
+| `/app` | the code, from the image | no — replaced every deploy |
 
-# Run as your Linux user, never root. Set these again when rebuilding.
-export SELLBIRD_UID=$(id -u) SELLBIRD_GID=$(id -g)
+`SELLBIRD_HOME=/config` is set in the image, so every path Sellbird writes is
+on the volume. Nothing private is in the image or in the (public) repository.
 
-# Sign in to Claude on the host first; ~/.claude must already exist.
-# The image ships Claude only; Codex is not included.
-docker compose build
-docker compose run --rm sellbird setup
+## Signing in
 
-docker compose up -d
-docker compose logs sellbird
-# Open the private unlock link printed in the logs.
+The dashboard is on a public URL, so the token link printed in a terminal is
+not how anyone reaches it. Set three environment variables on the deployment:
+
+```
+SELLBIRD_CLOUD_HOST=sellbird.example.com     # your hostname, no protocol, no slash
+DASHBOARD_USER=<the name you sign in with>
+DASHBOARD_PASS_HASH=<from: sellbird password-hash>
 ```
 
-Compose mounts the checkout directory at `/app`. Setup credentials, both YAML
-config files, training output, knowledge files, and `data/` remain in that
-checkout when containers are recreated. Directory mounting also permits atomic
-configuration saves; do not replace it with individual config-file mounts.
-Sellbird loads `.env` directly. Restart the container after editing credentials.
-The checkout and Claude auth directory must be writable by the selected user.
+Run `sellbird password-hash` on your own machine, type the password twice, and
+paste the printed `DASHBOARD_PASS_HASH` value. The password itself then never
+sits in the host's configuration, where anyone with access to the deployment
+can read it. `DASHBOARD_PASS` (the plain password) still works and is read
+only when no hash is set — remove it once the hash works.
 
-To train later, use `docker compose run --rm sellbird train <product-url>`;
-`sellbird.local.yaml` is saved directly to the checkout. Back up this file, `.env`,
-`skills/`, and `data/` before moving installations. The running code also comes
-from the checkout: restart after updating it, and rebuild when dependencies or
-the Dockerfile change. The build context excludes local data and credentials.
+Without `SELLBIRD_CLOUD_HOST` the dashboard answers only to `localhost` and
+the public URL returns `bad_host`. With it set and no sign-in configured, the
+port is open but nobody holding a browser can get in; the startup log says so.
 
-The dashboard listens on 5555. If you change the port in the Compose `command`,
-change the Dockerfile health-check port too and rebuild. Stop the service with
-`docker compose down`; its files remain in the checkout. Use a host install if
-you need the Codex provider.
+A sign-in lasts **7 days**, or **12 hours unused**, whichever comes first, and
+**Sign out** in the sidebar ends it. Sessions are listed in
+`/config/data/sessions.json` as hashes — the tokens themselves are never
+stored — and survive a redeploy. `DELETE /api/auth/sessions` signs every
+browser out at once. Five wrong passwords from one address, or twenty-five in
+all, stop sign-in attempts for fifteen minutes.
+
+Each sign-in gets its own token. It is not the token in
+`/config/data/dashboard-token`: that one is the machine credential the CLI and
+the MCP server use, it never expires, and no password can hand it out.
+
+## Claude
+
+`claude login` once, from a terminal on the running container (Coolify:
+**Terminal** on the resource). It writes to `/config/.claude`, so it is done
+once and not per deploy. Until it is done, the heartbeat can read websites but
+writes nothing, and **Today** says why.
+
+## First run
+
+1. Deploy. The container starts the dashboard; the heartbeat is started from
+   its **Controls** card, not automatically.
+2. Open the public URL and sign in.
+3. **Your company** → fill it in and save. The image ships the blank template,
+   so until this is done the loop refuses to start and Today says so.
+4. **Settings** → API keys (Apollo, and a mailbox). They are written to
+   `/config/.env` on the volume.
+5. `claude login` in the container's terminal.
+6. **Controls** → start Sellbird.
+
+## Upgrading
+
+Redeploy. The image is replaced and the volume is not, so the database,
+credentials, trained config and Claude login all carry over. Back up
+`/config` (the whole volume) before moving the installation anywhere.
+
+The dashboard listens on 5555 and the Compose file publishes it for the proxy
+to terminate TLS in front of. If you change the port, change the Dockerfile's
+health check to match and rebuild.
+
+## Upstream's local Compose setup
+
+Upstream Sellbird runs Compose on the operator's own Linux machine with
+`network_mode: host`, the checkout bind-mounted at `/app`, no published port,
+and the dashboard reached through an SSH tunnel
+(`ssh -L 5555:127.0.0.1:5555 <host>`). That remains the right shape for a
+single operator who wants nothing exposed: there is no password to manage,
+because there is nothing to reach. It is not what this fork's
+`docker-compose.yml` does. Use a host install if you need the Codex provider —
+the image ships the Claude CLI only.

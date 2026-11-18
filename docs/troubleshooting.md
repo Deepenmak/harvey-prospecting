@@ -16,6 +16,12 @@
 
 **Claude signs out after a redeploy (Docker/Coolify)** — The image puts `CLAUDE_CONFIG_DIR` on the `/config` volume, so `claude login` survives. On an older image it went to `$HOME` inside the container and was lost with it; rebuild, then sign in once more.
 
+**"Too many failed sign-ins"** — Five wrong passwords from one address, or twenty-five in all, stop sign-in for fifteen minutes; the reply says how long. It stops the right password too, on purpose. Waiting is the only way through: restarting the container clears the count, but if you can restart it you can also read `DASHBOARD_USER`.
+
+**Signed out unexpectedly** — A sign-in lasts 7 days, or 12 hours unused. `data/sessions.json` holding them is on the volume, so a redeploy keeps them; a *new* volume, or `DELETE /api/auth/sessions`, ends them all. Signing in again returns you to the tab you were on.
+
+**Back goes somewhere unexpected** — Every tab is a URL (`#/outbox`), so Back moves between the tabs you visited. It no longer lands on the sign-in form: `/login` now replaces its own history entry instead of leaving one behind, and visiting it while already signed in goes straight through.
+
 **Dashboard says "locked"** — Open the link `sellbird dashboard` printed (or `sellbird dashboard --url`). If it says the token file can't be used, follow the message: usually delete `data/dashboard-token` and restart the dashboard. Visit it as `127.0.0.1` or `localhost`; other host names are refused.
 
 **Codex calls fail** — Read the log line; every Codex error says what to do. "Not logged in" or "expired or is due for renewal" → use Codex once or run `codex login` with ChatGPT. "Hasn't been verified with Sellbird" → install the supported Codex version named in the message. "Isolation could not be verified" → a Codex config layer outside your `~/.codex` (for example a managed or `/etc/codex` config) forces a tool, hook, MCP server, instructions or custom endpoint back on; Sellbird refuses to send prompts until it's gone. Model catalog errors → choose an available model ID from the catalog shown in the message, or leave `brain.model` blank to select a listed model. Sellbird never switches to Claude on its own.

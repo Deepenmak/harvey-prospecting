@@ -22,9 +22,11 @@ every request passes, in order:
    a browser can't attach the token on an attacker's behalf, and a
    cross-origin page can neither read it nor set the header without a
    preflight this server never approves. Non-browser clients need it too.
-   Two tokens are accepted: the user's (``data/dashboard-token``, used by the
-   dashboard UI) and the coding agent's (``data/agent-token``, used through
-   the MCP server). The guard records which one matched as the request's
+   Three kinds are accepted: the user's (``data/dashboard-token``, used by
+   the dashboard UI and the CLI), a session token minted by a password
+   sign-in (``sellbird.sessions``, which expires and can be revoked), and
+   the coding agent's (``data/agent-token``, used through the MCP server).
+   A session counts as the user. The guard records which one matched as the request's
    principal (``request.state.principal``: ``"user"`` or ``"agent"``); routes
    that only the user may call check it (``dashboard.require_user``).
 5. Mutations with a body must be ``application/json``.
@@ -106,6 +108,18 @@ SECURITY_HEADERS = [
 ]
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# Sent only to a request that arrived over TLS, so a local http dashboard is
+# never told to refuse itself. A forged X-Forwarded-Proto only makes the
+# forger's own browser stricter, so trusting it here costs nothing.
+HSTS_HEADER = (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
+
+
+def arrived_over_tls(scope, headers: dict[str, list[str]]) -> bool:
+    if scope.get("scheme") == "https":
+        return True
+    forwarded = headers.get("x-forwarded-proto", [""])[0]
+    return forwarded.split(",")[0].strip().lower() == "https"
 
 
 class TokenError(Exception):
@@ -334,13 +348,20 @@ def is_public_path(method: str, path: str) -> bool:
     return all(seg not in ("", ".", "..") for seg in path[len("/static/"):].split("/"))
 
 
-def bearer_ok(header_values: list[str], token: str) -> bool:
+def bearer_value(header_values: list[str]) -> str:
+    """The token in a single ``Authorization: Bearer`` header, or ''."""
     if len(header_values) != 1:
-        return False
+        return ""
     scheme, _, presented = header_values[0].partition(" ")
     if scheme.lower() != "bearer":
+        return ""
+    return presented.strip()
+
+
+def bearer_ok(header_values: list[str], token: str) -> bool:
+    presented = bearer_value(header_values)
+    if not presented:
         return False
-    presented = presented.strip()
     return hmac.compare_digest(presented.encode("utf-8", "replace"), token.encode("ascii"))
 
 
@@ -357,10 +378,13 @@ class DashboardGuard:
     """ASGI middleware applying the checks in the module docstring to every
     request, and the security headers to every response."""
 
-    def __init__(self, app, store: TokenStore, agent_store: TokenStore | None = None):
+    def __init__(self, app, store: TokenStore, agent_store: TokenStore | None = None,
+                 sessions=None):
         self.app = app
         self.store = store
         self.agent_store = agent_store
+        # sellbird.sessions.SessionStore, or None for token-only installs.
+        self.sessions = sessions
 
     def _same_tokens_message(self) -> str:
         return (f"The agent token ({self.agent_store.path}) is the same as the dashboard "
@@ -379,11 +403,16 @@ class DashboardGuard:
         for k, v in scope.get("headers") or []:
             headers.setdefault(k.decode("latin-1").lower(), []).append(v.decode("latin-1"))
 
+        response_headers = list(SECURITY_HEADERS)
+        if arrived_over_tls(scope, headers):
+            response_headers.append(HSTS_HEADER)
+
         async def send_secured(message):
             if message["type"] == "http.response.start":
+                ours = {h for h, _ in response_headers}
                 existing = [(k, v) for k, v in message.get("headers", [])
-                            if k.lower() not in {h for h, _ in SECURITY_HEADERS}]
-                message = {**message, "headers": existing + SECURITY_HEADERS}
+                            if k.lower() not in ours]
+                message = {**message, "headers": existing + response_headers}
             await send(message)
 
         async def deny(status: int, code: str, message: str, extra=()):
@@ -443,7 +472,15 @@ class DashboardGuard:
             principal = "user"
         else:
             principal = None
-            if self.agent_store is not None and authorization:
+            session = None
+            presented = bearer_value(authorization)
+            # A sign-in's own token: the user's rights, but with an end date
+            # and a sign-out (sellbird.sessions).
+            if self.sessions is not None and presented:
+                session = self.sessions.check(presented)
+                if session is not None:
+                    principal = "user"
+            if principal is None and self.agent_store is not None and authorization:
                 try:
                     agent_token = self.agent_store.get()
                 except TokenError as e:
@@ -454,8 +491,12 @@ class DashboardGuard:
                     principal = "agent"
             if principal is None:
                 return await deny(401, "unauthorized",
-                                  "Open the link printed by 'sellbird dashboard' to unlock.",
+                                  "Open the link printed by 'sellbird dashboard' to unlock, "
+                                  "or sign in at /login.",
                                   extra=[(b"www-authenticate", b'Bearer realm="sellbird"')])
+            if session is not None:
+                scope.setdefault("state", {})["session_token"] = presented
+                scope.setdefault("state", {})["session"] = session
         scope.setdefault("state", {})["principal"] = principal
 
         # 4. Mutations carry JSON or nothing.

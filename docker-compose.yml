@@ -8,9 +8,10 @@ services:
       # Everything private and everything stateful lives here: sellbird.local.yaml,
       # .env, skills/, prompts/, data/sellbird.db and exports/. Nothing private is
       # in the image or in the (public) Git repo, and a redeploy never wipes it.
+      # The Claude login is inside it too: the image sets
+      # CLAUDE_CONFIG_DIR=/config/.claude, so 'claude login' is done once and
+      # survives a redeploy. One volume, one place to back up.
       - sellbird_config:/config
-      # Claude Code credentials, so 'claude login' is done once, not per deploy.
-      - claude_home:/root/.claude
     environment:
       # ── Cloud deployment ──────────────────────────────────────────────────
       # Your public hostname (no protocol, no trailing slash). Without it the
@@ -18,10 +19,14 @@ services:
       # "bad_host". Coolify shows the hostname on the resource's Domains field.
       SELLBIRD_CLOUD_HOST: ${SELLBIRD_CLOUD_HOST}
 
-      # Dashboard login. The app is on a public URL, so this is what stops
-      # strangers reading your pipeline.
+      # Dashboard sign-in. The app is on a public URL, so this is what stops
+      # strangers reading your pipeline. Prefer the hash: run
+      # 'sellbird password-hash' locally, paste the result here, and the
+      # password itself never sits in the deployment's environment.
+      # DASHBOARD_PASS is still read when no hash is set.
       DASHBOARD_USER: ${DASHBOARD_USER}
-      DASHBOARD_PASS: ${DASHBOARD_PASS}
+      DASHBOARD_PASS_HASH: ${DASHBOARD_PASS_HASH:-}
+      DASHBOARD_PASS: ${DASHBOARD_PASS:-}
 
       # ── API keys ─────────────────────────────────────────────────────────
       # Optional here: all of these can also be typed into the dashboard's
@@ -45,4 +50,3 @@ services:
 
 volumes:
   sellbird_config:
-  claude_home:

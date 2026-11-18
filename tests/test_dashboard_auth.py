@@ -45,6 +45,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(dash, "PID_FILE", tmp_path / "data" / "sellbird.pid")
     monkeypatch.setattr(dash, "LOG_FILE", tmp_path / "data" / "sellbird.log")
     dash.token_store.configure(tmp_path / "data" / "dashboard-token")
+    dash.session_store.configure(tmp_path / "data" / "sessions.json")
     spawned = []
 
     class NoPopen:
@@ -75,7 +76,11 @@ def _protected_requests():
     for route in dash.app.routes:
         if not isinstance(route, Route):
             continue
-        if route.path in ("/", "/static/{path:path}", "/api/instance"):  # public by design
+        # Public by design: the shell and its assets carry no data, the
+        # instance id unlocks nothing, and a sign-in page you need a token to
+        # reach would be a sign-in page nobody could use.
+        if route.path in ("/", "/static/{path:path}", "/api/instance",
+                          "/login", "/api/auth/login"):
             continue
         path = re.sub(r"\{[^}]+\}", "x", route.path)
         for method in sorted(route.methods - {"HEAD"}):

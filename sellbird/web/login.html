@@ -15,11 +15,12 @@
   .login-brand svg { width: 28px; height: 18px; }
   .login-brand span { font-size: 1.1rem; font-weight: 600; letter-spacing: -0.01em; }
   .login-error { display: none; margin-bottom: 16px; }
+  #login-card[hidden] { display: none; }
 </style>
 </head>
 <body>
 
-<div class="login-card card">
+<div class="login-card card" id="login-card" hidden>
   <div class="login-brand">
     <svg viewBox="0 0 1040 640" aria-hidden="true"><path fill="currentColor" d="M83 0C246 47 417 91 562 157C676 209 759 258 744 314C813 257 896 239 954 301L1034 324L944 359C837 473 731 548 563 524C506 516 464 513 427 519L0 631L407 406L224 213L555 300L420 428L663 315L630 281C407 229 264 237 83 0Z"/></svg>
     <span>Sellbird</span>
@@ -40,13 +41,41 @@
     </div>
     <button class="btn btn-primary" type="submit" id="submit-btn" style="width:100%;margin-top:8px">Sign in</button>
   </form>
+  <p class="desc" style="margin-top:16px;margin-bottom:0">A sign-in lasts
+    <b>7 days</b>, or 12 hours unused, and <b>Sign out</b> in the sidebar ends it.</p>
 </div>
 
 <script>
+// Where to go once this is done. The dashboard sends its current route in
+// ?next so a sign-in returns you to the tab you were on; only a same-origin
+// path is ever followed.
+function nextUrl() {
+  const raw = new URLSearchParams(window.location.search).get('next') || '/';
+  const safe = raw.startsWith('/') && !raw.startsWith('//') && !raw.includes('\\');
+  return safe ? raw : '/';
+}
+
+// location.replace, never href: leaving /login in the browser's history is
+// what made Back land on a sign-in form from inside the dashboard.
+function leave() { window.location.replace(nextUrl()); }
+
+// Already signed in (a stale /login entry in history, or a second tab)?
+// Don't ask again.
+(async function skipIfSignedIn() {
+  const card = document.getElementById('login-card');
+  if (!authToken()) { card.hidden = false; return; }
+  try {
+    const r = await authFetch('/api/auth/me');
+    if (r.ok) { leave(); return; }
+  } catch { /* fall through to the form */ }
+  card.hidden = false;
+})();
+
 document.getElementById('login-form').addEventListener('submit', async function(e) {
   e.preventDefault();
   const btn = document.getElementById('submit-btn');
   const err = document.getElementById('login-error');
+  const fail = text => { err.textContent = text; err.style.display = ''; };
   btn.disabled = true;
   btn.textContent = 'Signing in…';
   err.style.display = 'none';
@@ -65,22 +94,13 @@ document.getElementById('login-form').addEventListener('submit', async function(
     let data;
     try { data = await resp.json(); } catch { data = {}; }
     if (!resp.ok) {
-      err.textContent = data.detail || 'Invalid credentials.';
-      err.style.display = '';
+      fail(data.message || data.detail || 'Invalid credentials.');
       return;
     }
-    if (setAuthToken(data.token)) {
-      const next = new URLSearchParams(window.location.search).get('next') || '/';
-      // Only redirect to same-origin paths.
-      const safe = next.startsWith('/') && !next.startsWith('//') ? next : '/';
-      window.location.href = safe;
-    } else {
-      err.textContent = 'Token error — try again.';
-      err.style.display = '';
-    }
+    if (setAuthToken(data.token)) leave();
+    else fail('The server sent a session this browser cannot store. Try again.');
   } catch {
-    err.textContent = 'Network error — please try again.';
-    err.style.display = '';
+    fail('Network error — please try again.');
   } finally {
     btn.disabled = false;
     btn.textContent = 'Sign in';

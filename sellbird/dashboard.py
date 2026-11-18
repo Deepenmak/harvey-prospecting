@@ -30,6 +30,7 @@ logger = logging.getLogger("sellbird.dashboard")
 
 from sellbird import agent_policy  # noqa: E402
 from sellbird import dashboard_auth as auth  # noqa: E402
+from sellbird import sessions  # noqa: E402
 from sellbird.paths import PACKAGE_ROOT, PROJECT_ROOT, is_checkout  # noqa: E402
 from sellbird import storage  # noqa: E402
 from sellbird.pidfile import LOCK_FILE, loop_lock_held, pid_alive  # noqa: E402
@@ -42,6 +43,7 @@ PID_FILE = PROJECT_ROOT / "data" / "sellbird.pid"
 LOG_FILE = PROJECT_ROOT / "data" / "sellbird.log"
 TOKEN_FILE = PROJECT_ROOT / "data" / "dashboard-token"
 AGENT_TOKEN_FILE = PROJECT_ROOT / "data" / "agent-token"
+SESSIONS_FILE = PROJECT_ROOT / "data" / "sessions.json"
 
 
 def _resolve_config_file() -> Path:
@@ -60,9 +62,14 @@ def _resolve_config_file() -> Path:
 app = FastAPI(title="Sellbird Dashboard", docs_url=None, redoc_url=None, openapi_url=None)
 token_store = auth.TokenStore(TOKEN_FILE)
 agent_token_store = auth.TokenStore(AGENT_TOKEN_FILE)
+# Password sign-ins get their own expiring, revocable token (sellbird.sessions)
+# rather than a copy of the one above.
+session_store = sessions.SessionStore(SESSIONS_FILE)
+login_throttle = sessions.LoginThrottle()
 # Innermost first: the guard (added next) sets the principal before this runs.
 app.add_middleware(agent_policy.AgentPolicy)
-app.add_middleware(auth.DashboardGuard, store=token_store, agent_store=agent_token_store)
+app.add_middleware(auth.DashboardGuard, store=token_store, agent_store=agent_token_store,
+                   sessions=session_store)
 
 
 class home_middleware:
@@ -3417,17 +3424,76 @@ async def login_page():
     return login_html.read_text(encoding="utf-8")
 
 
+# ── Signing in ──
+#
+# A password sign-in used to hand back the dashboard's own token, which never
+# expires and is the same for everybody. It now mints a session instead
+# (sellbird.sessions): its own token, with an idle clock, an end date, and a
+# sign-out that ends it without touching anyone else's.
+
+
+def login_configured() -> bool:
+    """Whether a username and some form of password are set."""
+    user = (os.getenv("DASHBOARD_USER") or "").strip()
+    secret = ((os.getenv("DASHBOARD_PASS_HASH") or "").strip()
+              or (os.getenv("DASHBOARD_PASS") or "").strip())
+    return bool(user and secret)
+
+
+def _password_ok(given: str) -> bool:
+    """Check a password against DASHBOARD_PASS_HASH, else DASHBOARD_PASS.
+
+    A hash is preferred: the stored value is then useless to whoever can read
+    the deployment's environment. Only one is ever in play, so a hash that
+    does not verify is a failure and never falls back to the plain value.
+    """
+    import hmac as _hmac
+    hashed = (os.getenv("DASHBOARD_PASS_HASH") or "").strip()
+    if hashed:
+        return sessions.verify_password(given, hashed)
+    plain = (os.getenv("DASHBOARD_PASS") or "").strip()
+    if not plain:
+        return False
+    return _hmac.compare_digest(given.encode("utf-8"), plain.encode("utf-8"))
+
+
+def _request_source(request: Request) -> str:
+    """Who is knocking, for the sign-in throttle only.
+
+    Behind a reverse proxy every request shares one peer address, so the
+    forwarded-for header is used when the proxy sets it. That header is
+    attacker-controlled, which is why the throttle also counts attempts in
+    total: a forged header can split one attacker's count, but it cannot
+    raise the ceiling they share with everyone else.
+    """
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded and len(forwarded) <= 64:
+        return forwarded
+    client = request.client
+    return client.host if client else "unknown"
+
+
 @app.post("/api/auth/login")
 async def api_auth_login(request: Request):
-    import hmac as _hmac
     username = (os.getenv("DASHBOARD_USER") or "").strip()
-    password = (os.getenv("DASHBOARD_PASS") or "").strip()
-    if not username or not password:
+    if not login_configured():
         return JSONResponse(
             {"error": "not_configured",
              "message": "Dashboard login isn't configured. Set DASHBOARD_USER and "
-                        "DASHBOARD_PASS on the server, then redeploy."},
+                        "DASHBOARD_PASS (or DASHBOARD_PASS_HASH) on the server, "
+                        "then redeploy."},
             status_code=503)
+
+    source = _request_source(request)
+    wait = login_throttle.retry_after(source)
+    if wait:
+        logger.warning("Sign-in refused: too many failed attempts from %s", source)
+        return JSONResponse(
+            {"error": "too_many_attempts",
+             "message": f"Too many failed sign-ins. Try again in "
+                        f"{max(1, wait // 60)} minute(s)."},
+            status_code=429, headers={"Retry-After": str(wait)})
+
     try:
         body = await request.json()
     except Exception:
@@ -3436,19 +3502,73 @@ async def api_auth_login(request: Request):
         return JSONResponse({"error": "bad_request", "message": "Invalid request body."},
                             status_code=400)
     u = str(body.get("username") or "")
-    p = str(body.get("password") or "")
-    # Both halves are always compared, so the reply takes the same time
+    pw = str(body.get("password") or "")
+    # Both halves are always checked, so the reply takes the same time
     # whether it was the name or the password that was wrong.
+    import hmac as _hmac
     name_ok = _hmac.compare_digest(u.encode("utf-8"), username.encode("utf-8"))
-    pass_ok = _hmac.compare_digest(p.encode("utf-8"), password.encode("utf-8"))
+    pass_ok = await asyncio.to_thread(_password_ok, pw)
     if not (name_ok and pass_ok):
+        login_throttle.record_failure(source)
+        logger.warning("Failed dashboard sign-in from %s", source)
         return JSONResponse({"error": "unauthorized", "message": "Invalid credentials."},
                             status_code=401)
-    try:
-        return {"token": token_store.get()}
-    except auth.TokenError as e:
-        return JSONResponse({"error": "token_unavailable", "message": str(e)},
-                            status_code=503)
+
+    login_throttle.record_success(source)
+    agent = (request.headers.get("user-agent") or "")[:80]
+    token = await asyncio.to_thread(session_store.create, agent)
+    logger.info("Dashboard sign-in from %s", source)
+    return {"token": token, "expires_in": sessions.MAX_SECONDS,
+            "idle_timeout": sessions.IDLE_SECONDS}
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(request: Request):
+    """End this sign-in. The master token cannot be ended this way: it is a
+    file on the server, and removing it is a different decision."""
+    token = getattr(request.state, "session_token", "") or ""
+    if not token:
+        return {"success": True, "ended": False,
+                "message": "This tab is using the dashboard token, not a sign-in. "
+                           "Close the tab to drop it."}
+    ended = await asyncio.to_thread(session_store.revoke, token)
+    return {"success": True, "ended": bool(ended)}
+
+
+@app.get("/api/auth/me")
+async def api_auth_me(request: Request):
+    """Who this request is, so the page can tell a live sign-in from a stale
+    one without having to provoke a 401."""
+    session = getattr(request.state, "session", None)
+    out = {
+        "principal": getattr(request.state, "principal", None),
+        "kind": "session" if session else "token",
+        "login_enabled": login_configured(),
+        "hashed_password": bool((os.getenv("DASHBOARD_PASS_HASH") or "").strip()),
+    }
+    if session:
+        out["session"] = {"id": session.get("id", ""),
+                          "created_at": session.get("created_at", 0),
+                          "expires_at": session.get("expires_at", 0),
+                          "label": session.get("label", "")}
+    return out
+
+
+@app.get("/api/auth/sessions")
+async def api_auth_sessions(request: Request):
+    return {"sessions": await asyncio.to_thread(session_store.sessions),
+            "idle_timeout": sessions.IDLE_SECONDS,
+            "max_age": sessions.MAX_SECONDS,
+            "warning": session_store.owner_warning()}
+
+
+@app.delete("/api/auth/sessions")
+async def api_auth_revoke_all(request: Request):
+    """Sign every browser out, including this one. Not an agent route, so
+    only the user reaches it (sellbird.agent_policy)."""
+    count = await asyncio.to_thread(session_store.revoke_all)
+    logger.info("All dashboard sign-ins revoked (%d)", count)
+    return {"success": True, "ended": count}
 
 
 class DashboardSetupError(Exception):
@@ -3496,7 +3616,15 @@ INSTANCE_ID = uuid.uuid4().hex
 
 @app.get("/api/instance")
 async def get_instance():
-    return {"instance": INSTANCE_ID}
+    """Which dashboard answers here, and how to get in.
+
+    Public by design (dashboard_auth.is_public_path): a random id per process
+    and two booleans, so a locked page can offer the right way in instead of
+    guessing. Neither unlocks anything.
+    """
+    return {"instance": INSTANCE_ID,
+            "login_enabled": login_configured(),
+            "cloud": bool((os.getenv("SELLBIRD_CLOUD_HOST") or "").strip())}
 
 
 from sellbird.inbox_routes import router as _inbox_router  # noqa: E402
@@ -3544,6 +3672,12 @@ def start_dashboard(host: str = "127.0.0.1", port: int = 5555):
     except (DashboardSetupError, auth.TokenError) as e:
         raise DashboardSetupError(str(e)) from e
 
+    cloud_host = (os.getenv("SELLBIRD_CLOUD_HOST") or "").strip()
+    if cloud_host and not login_configured():
+        print("\n  SELLBIRD_CLOUD_HOST is set, so this listens on every interface,")
+        print("  but no sign-in is configured. Set DASHBOARD_USER and")
+        print("  DASHBOARD_PASS_HASH (sellbird password-hash) and redeploy, or nobody")
+        print("  can get in but whoever holds the token file.")
     print(f"\n  Sellbird Dashboard running. Open this link to unlock it:\n\n    {url}\n")
     print(f"  The token is stored in {token_store.path} (owner-only). Keep the link")
     print("  private; anyone with it can use the dashboard. Press Ctrl+C to stop.\n")

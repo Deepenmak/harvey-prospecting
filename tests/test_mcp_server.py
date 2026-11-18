@@ -199,4 +199,8 @@ def test_a_bad_dashboard_file_is_no_dashboard(tmp_path, text):
 def test_instance_needs_no_token():
     from fastapi.testclient import TestClient
     with TestClient(dash.app, base_url=ORIGIN) as http:
-        assert http.get("/api/instance").json() == {"instance": dash.INSTANCE_ID}
+        body = http.get("/api/instance").json()
+        # Which core answers here, and which way in to offer. Nothing else:
+        # no token, no configuration, nothing that unlocks anything.
+        assert body["instance"] == dash.INSTANCE_ID
+        assert set(body) == {"instance", "login_enabled", "cloud"}
