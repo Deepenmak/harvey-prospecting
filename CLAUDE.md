@@ -385,6 +385,7 @@ source .venv/bin/activate    # Always activate venv first
 sellbird run                   # Start the heartbeat loop
 sellbird dashboard             # Web UI at http://127.0.0.1:5555 (open the printed link)
 sellbird password-hash         # Hash a dashboard password for DASHBOARD_PASS_HASH (deployed installs)
+sellbird login-check           # Why the dashboard sign-in isn't working; run it on the server
 sellbird setup                 # Re-run setup wizard
 sellbird train <url>           # Train on a product website
 sellbird status                # Pipeline summary

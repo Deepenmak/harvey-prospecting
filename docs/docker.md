@@ -32,7 +32,12 @@ DASHBOARD_PASS_HASH=<from: sellbird password-hash>
 ```
 
 Run `sellbird password-hash` on your own machine, type the password twice, and
-paste the printed `DASHBOARD_PASS_HASH` value. The password itself then never
+paste the printed `DASHBOARD_PASS_HASH` value. It contains no `$`, on purpose:
+docker compose, `.env` files and most hosting UIs read `$16384` as a variable
+reference, and a hash that arrives with pieces missing just looks like a
+password that doesn't work. If a sign-in refuses you, run `sellbird login-check`
+in a terminal on the server — it reads the same environment the dashboard does
+and says which cause it is. The password itself then never
 sits in the host's configuration, where anyone with access to the deployment
 can read it.
 

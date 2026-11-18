@@ -16,6 +16,10 @@
 
 **Claude signs out after a redeploy (Docker/Coolify)** — The image puts `CLAUDE_CONFIG_DIR` on the `/config` volume, so `claude login` survives. On an older image it went to `$HOME` inside the container and was lost with it; rebuild, then sign in once more.
 
+**The dashboard password doesn't work** — Run `sellbird login-check` in a terminal on the server (Coolify: **Terminal** on the resource). It reads the same environment the dashboard reads and says which of the look-alike causes it is: the variable never arrived, the hash was altered on the way in, the username differs, or nothing is configured at all. `sellbird login-check --password` also checks a password against what is set. It prints no secret. Note that `sellbird password-hash` now prints a hash with no `$` in it — a `$` is read as a variable reference by docker compose, `.env` files and most hosting UIs, so an older hash could arrive with pieces missing; the older form is still accepted, including the `$$` form one round of escaping leaves behind.
+
+**Locked out of the dashboard completely** — The master token still works and no password can disable it. In a terminal on the server, `cat data/dashboard-token` (on a container deployment, `/config/data/dashboard-token`) and paste it into the dashboard's unlock box. Then fix the sign-in with `sellbird login-check`.
+
 **"Too many failed sign-ins"** — Five wrong passwords from one address, or twenty-five in all, stop sign-in for fifteen minutes; the reply says how long. It stops the right password too, on purpose. Waiting is the only way through: restarting the container clears the count, but if you can restart it you can also read `DASHBOARD_USER`.
 
 **Signed out unexpectedly** — Changing `DASHBOARD_USER`, `DASHBOARD_PASS` or `DASHBOARD_PASS_HASH` ends every sign-in made under the old value, on purpose: that is how access is taken away. Otherwise a sign-in lasts 7 days, or 12 hours unused. `data/sessions.json` holding them is on the volume, so a redeploy keeps them; a *new* volume, or `DELETE /api/auth/sessions`, ends them all. Signing in again returns you to the tab you were on.

@@ -307,19 +307,48 @@ class LoginThrottle:
 
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2 ** 14, 8, 1
 
+# Fields are separated by a dot, not the "$" that password hashes traditionally
+# use. This value's whole job is to be pasted into a deployment's environment,
+# and "$" is the one character that layer treats as special: docker compose,
+# .env files, shells and most hosting UIs all read "$16384" as a variable
+# reference. A value that arrives mangled fails to verify, and the only symptom
+# is a password that "doesn't work" with nothing in any log to explain it. Dots
+# and hex travel through all of it untouched.
+#
+# The "$" form is still accepted, because installs already carry one, and so is
+# a "$$" doubled form, which is what one round of compose escaping leaves
+# behind -- that is a value we can read correctly, so refusing it would only
+# lock someone out of their own dashboard for a reason they cannot see.
+
 
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode("utf-8"), salt=salt,
                             n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=32)
-    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${digest.hex()}"
+    return ".".join(["scrypt", str(_SCRYPT_N), str(_SCRYPT_R), str(_SCRYPT_P),
+                     salt.hex(), digest.hex()])
+
+
+def _fields(stored: str) -> list[str] | None:
+    """The six fields of a stored hash, however it was written, or None."""
+    text = str(stored or "").strip()
+    if not text:
+        return None
+    if "." in text and "$" not in text:
+        parts = text.split(".")
+    else:
+        # "$$" is one round of compose escaping over the old "$" form.
+        parts = text.replace("$$", "$").split("$")
+    if len(parts) != 6 or parts[0] != "scrypt":
+        return None
+    return parts
 
 
 def verify_password(password: str, stored: str) -> bool:
     """Check a password against a hash_password() string. False on anything
     malformed: an unreadable hash must never let a password through."""
-    parts = str(stored or "").split("$")
-    if len(parts) != 6 or parts[0] != "scrypt":
+    parts = _fields(stored)
+    if parts is None:
         return False
     try:
         n, r, p = int(parts[1]), int(parts[2]), int(parts[3])
@@ -335,3 +364,39 @@ def verify_password(password: str, stored: str) -> bool:
     except ValueError:
         return False
     return secrets.compare_digest(digest, expected)
+
+
+def describe_secret(stored: str) -> str:
+    """What is wrong with a stored hash, in a sentence, or ''.
+
+    Written for someone locked out of their own dashboard, so it says what to
+    do rather than what the parser thought. It never echoes the value.
+    """
+    text = str(stored or "")
+    if not text.strip():
+        return "It is empty. Nothing was passed through to the container."
+    if text != text.strip():
+        return ("It has a space or newline around it. Paste it again with no "
+                "trailing whitespace.")
+    parts = _fields(text)
+    if parts is None:
+        if "scrypt" not in text:
+            return ("It doesn't look like a hash at all. This variable takes the "
+                    "output of 'sellbird password-hash', not the password.")
+        pieces = len(text.replace("$$", "$").replace(".", "$").split("$"))
+        if pieces < 6:
+            return (f"It has {pieces} field(s) instead of 6, so something along the "
+                    "way ate part of it -- usually a '$' being read as a variable. "
+                    "Run 'sellbird password-hash' again for a '$'-free value.")
+        return "Its fields can't be read. Run 'sellbird password-hash' again."
+    try:
+        bytes.fromhex(parts[4]), bytes.fromhex(parts[5])
+        int(parts[1]), int(parts[2]), int(parts[3])
+    except ValueError:
+        return ("Its salt or digest isn't hex, so the value was altered in transit. "
+                "Run 'sellbird password-hash' again for a '$'-free value.")
+    if "$" in text:
+        return ("It works, but it is the older '$' form. A '$' can be read as a "
+                "variable by the host's configuration; 'sellbird password-hash' "
+                "now prints a form without one.")
+    return ""

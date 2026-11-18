@@ -244,6 +244,97 @@ def cmd_password_hash(args):
     print("  settings. The compose file does not name it, so nothing pins it.\n")
 
 
+def cmd_login_check(args):
+    """Say what the sign-in looks like from the server's side.
+
+    Run this in a terminal on the box the dashboard runs on (Coolify:
+    Terminal on the resource), because the point is to read the same
+    environment the dashboard reads. "The password doesn't work" has several
+    causes that look identical in a browser -- the variable never arrived,
+    the hash was mangled on the way in, the username differs, the attempt
+    limit is engaged -- and this tells them apart.
+
+    It prints no secret: lengths and verdicts only.
+    """
+    import os
+
+    from sellbird.sessions import describe_secret, verify_password
+
+    user = (os.getenv("DASHBOARD_USER") or "").strip()
+    hashed = (os.getenv("DASHBOARD_PASS_HASH") or "").strip()
+    plain = (os.getenv("DASHBOARD_PASS") or "").strip()
+    cloud = (os.getenv("SELLBIRD_CLOUD_HOST") or "").strip()
+
+    print("\n  Dashboard sign-in, as this process sees it\n")
+    print(f"    SELLBIRD_CLOUD_HOST   {cloud or '(not set: answers to localhost only)'}")
+    print(f"    DASHBOARD_USER        {user or '(not set)'}"
+          + (f"   [{len(user)} characters]" if user else ""))
+    print(f"    DASHBOARD_PASS_HASH   {'set, ' + str(len(hashed)) + ' characters' if hashed else '(not set)'}")
+    print(f"    DASHBOARD_PASS        {'set, ' + str(len(plain)) + ' characters' if plain else '(not set)'}")
+
+    problems = []
+    if not user:
+        problems.append("DASHBOARD_USER is not set, so no sign-in is possible.")
+    if hashed:
+        note = describe_secret(hashed)
+        if note:
+            problems.append("DASHBOARD_PASS_HASH: " + note)
+    elif plain:
+        print("\n    The plain password is in use. A hash is better: the value in the")
+        print("    host's configuration is then no use to whoever reads it.")
+    else:
+        problems.append("Neither DASHBOARD_PASS_HASH nor DASHBOARD_PASS is set, so "
+                        "the sign-in page answers \"not configured\".")
+
+    if hashed and plain:
+        print("\n    Both are set. The hash wins and the plain password is never")
+        print("    used, so delete DASHBOARD_PASS.")
+
+    if problems:
+        print("\n  What is wrong\n")
+        for problem in problems:
+            print(f"    - {problem}")
+    else:
+        print("\n  This looks usable.")
+
+    # Checking a password means prompting for one, and a prompt is asked for
+    # rather than sprung: run without a terminal (`docker exec` with no -t,
+    # a script, a health check) getpass blocks for ever, and isatty() is not
+    # trustworthy enough to decide it -- it reports a terminal under some
+    # Windows shells even when stdin is /dev/null.
+    if getattr(args, "password", False) and (hashed or plain):
+        print("\n  Type the password to check it against what is set here.")
+        print("  It is not echoed and not stored.\n")
+        import getpass
+        try:
+            given = getpass.getpass("    Password: ")
+        except (EOFError, KeyboardInterrupt, OSError):
+            given = ""
+        if given:
+            if hashed:
+                ok = verify_password(given, hashed)
+                which = "DASHBOARD_PASS_HASH"
+            else:
+                ok = given == plain
+                which = "DASHBOARD_PASS"
+            print(f"\n    {'That password matches' if ok else 'That password does NOT match'}"
+                  f" {which}.")
+            if not ok:
+                print("    Either it is the wrong password, or the value here is not the")
+                print("    one you made. Run 'sellbird password-hash' and paste it again.")
+
+    if (hashed or plain) and not getattr(args, "password", False):
+        print("\n  To check a password against this:  sellbird login-check --password")
+    print("\n  If the password is right and the browser still refuses it, the attempt")
+    print("  limit may be engaged: five wrong tries from one address, or twenty-five")
+    print("  in all, stop sign-in for fifteen minutes -- including correct ones. It is")
+    print("  held in memory, so restarting this container clears it.")
+    print("\n  Locked out entirely? The master token still works. Paste the contents")
+    print("  of this file into the dashboard's unlock box:")
+    from sellbird.paths import PROJECT_ROOT as _root
+    print(f"    {_root / 'data' / 'dashboard-token'}\n")
+
+
 def cmd_status(args):
     """Show current pipeline status."""
     from sellbird.state import StateManager
@@ -1473,6 +1564,14 @@ def main():
         "password-hash",
         help="Hash a dashboard password for DASHBOARD_PASS_HASH")
     sub.set_defaults(func=cmd_password_hash)
+
+    # sellbird login-check
+    sub = subparsers.add_parser(
+        "login-check",
+        help="Why the dashboard sign-in isn't working (run it on the server)")
+    sub.add_argument("--password", action="store_true",
+                     help="Also prompt for a password and check it against what is set")
+    sub.set_defaults(func=cmd_login_check)
 
     # sellbird status
     sub = subparsers.add_parser("status", help="Show pipeline status")

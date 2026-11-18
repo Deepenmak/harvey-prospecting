@@ -291,3 +291,71 @@ def test_the_mark_never_comes_back_out_of_the_store(store):
     token = store.create("browser", credential="secret-mark")
     assert "secret-mark" not in json.dumps(store.sessions())
     assert "secret-mark" not in json.dumps(store.check(token, "secret-mark"))
+
+
+# ── The hash has to survive being pasted into a deployment ──
+
+
+def test_a_new_hash_has_no_dollar_signs_in_it():
+    """A "$" is the one character the layer this value travels through treats
+    as special: docker compose, .env files, shells and most hosting UIs read
+    "$16384" as a variable reference. A mangled value fails to verify and the
+    only symptom is a password that "doesn't work", with nothing in any log."""
+    value = hash_password("a-long-enough-password")
+    assert "$" not in value
+    # Hex and dots, so nothing along the way has an opinion about it.
+    assert set(value) <= set("0123456789abcdef.scrypt")
+
+
+def test_the_old_dollar_form_still_verifies():
+    """Installs already carry one; changing the format must not lock them out."""
+    salt, digest = "aa" * 16, "bb" * 32
+    stored = f"scrypt$16384$8$1${salt}${digest}"
+    # It parses (the digest won't match, but it is read, not rejected).
+    assert verify_password("x", stored) is False
+    assert "older '$' form" in sessions.describe_secret(stored)
+
+
+def test_a_hash_doubled_by_compose_escaping_still_works():
+    """One round of compose escaping turns every "$" into "$$". That is a
+    value we can read correctly, so refusing it would lock someone out of
+    their own dashboard for a reason they cannot see."""
+    value = "scrypt$16384$8$1$" + "aa" * 16 + "$" + "bb" * 32
+    import hashlib
+    digest = hashlib.scrypt(b"right", salt=bytes.fromhex("aa" * 16),
+                            n=16384, r=8, p=1, dklen=32).hex()
+    value = f"scrypt$16384$8$1${'aa' * 16}${digest}"
+    assert verify_password("right", value)
+    assert verify_password("right", value.replace("$", "$$"))
+    assert not verify_password("wrong", value.replace("$", "$$"))
+
+
+def test_a_mangled_hash_still_lets_nothing_through():
+    """Tolerating the doubled form must not mean tolerating a broken one."""
+    for broken in ("scrypt1", "scrypt", "scrypt.16384.8", "", "   ",
+                   "scrypt.16384.8.1.nothex.nothex"):
+        assert not verify_password("right", broken)
+
+
+@pytest.mark.parametrize("stored, says", [
+    ("", "empty"),
+    ("   ", "empty"),
+    ("scrypt1", "field"),
+    ("my-actual-password", "doesn't look like a hash"),
+    ("scrypt.16384.8.1.zz.zz", "isn't hex"),
+])
+def test_a_bad_hash_is_explained_in_a_sentence(stored, says):
+    """Written for someone locked out of their own dashboard, so it says what
+    to do rather than what the parser thought."""
+    note = sessions.describe_secret(stored)
+    assert says in note
+    assert stored.strip() not in note or not stored.strip()   # never echoes it
+
+
+def test_a_good_hash_has_nothing_to_say():
+    assert sessions.describe_secret(hash_password("a-long-enough-password")) == ""
+
+
+def test_a_hash_with_whitespace_around_it_is_called_out():
+    note = sessions.describe_secret(" " + hash_password("a-long-enough-password") + "\n")
+    assert "space or newline" in note
