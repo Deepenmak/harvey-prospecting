@@ -3539,29 +3539,45 @@ BINARY_TYPES = {".woff2": "font/woff2", ".woff": "font/woff", ".png": "image/png
 
 
 @app.get("/static/{path:path}")
-async def static_file(path: str):
+async def static_file(path: str, request: Request):
     """Serve the dashboard's own assets from disk.
 
     Read per-request rather than cached at import: editing app.css and hitting
     reload is the whole point of having them as real files. Fonts are vendored
     rather than fetched from a CDN — this is a local tool and it should work
     with the network off.
+
+    Every file carries an ETag made from its size and the time it changed, and
+    an unchanged one answers 304 with no body. Editing a file still shows up on
+    the next reload, because the browser is told to revalidate rather than to
+    reuse blindly; what it no longer does is download app.js, app.css and the
+    fonts again — about 300 KB — on every single load. Over a network that is
+    the difference between a page that opens and a page that waits.
     """
     target = (WEB_DIR / path).resolve()
     root = WEB_DIR.resolve()
     if not target.is_file() or not target.is_relative_to(root):
         return PlainTextResponse("not found", status_code=404)
 
-    if target.suffix in BINARY_TYPES:
+    info = target.stat()
+    etag = f'"{int(info.st_mtime):x}-{info.st_size:x}"'
+    binary = target.suffix in BINARY_TYPES
+    # A font is content-addressed by its name and never edited in place, so it
+    # can be kept for a week. Code and styles revalidate every load.
+    cache = "public, max-age=604800" if binary else "no-cache"
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": cache})
+
+    if binary:
         return Response(
             target.read_bytes(),
             media_type=BINARY_TYPES[target.suffix],
-            headers={"Cache-Control": "public, max-age=604800"},
+            headers={"Cache-Control": cache, "ETag": etag},
         )
     return PlainTextResponse(
         target.read_text(encoding="utf-8"),
         media_type=TEXT_TYPES.get(target.suffix, "text/plain"),
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": cache, "ETag": etag},
     )
 
 

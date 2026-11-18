@@ -403,9 +403,21 @@ class DashboardGuard:
         for k, v in scope.get("headers") or []:
             headers.setdefault(k.decode("latin-1").lower(), []).append(v.decode("latin-1"))
 
+        method = scope.get("method", "GET").upper()
+        path = scope.get("path", "")
+
         response_headers = list(SECURITY_HEADERS)
         if arrived_over_tls(scope, headers):
             response_headers.append(HSTS_HEADER)
+        # no-store is right for every reply that carries data, and wrong for
+        # the page's own stylesheet, script and fonts: it had the browser
+        # fetch 300 KB again on every single load, and silently undid the
+        # week-long cache the font route asks for. Static files are public,
+        # identical for everyone and served without a token, so nothing is
+        # protected by refusing to store them. The route says how they cache.
+        if path.startswith("/static/") and method in ("GET", "HEAD"):
+            response_headers = [(k, v) for k, v in response_headers
+                                if k != b"cache-control"]
 
         async def send_secured(message):
             if message["type"] == "http.response.start":
@@ -422,9 +434,6 @@ class DashboardGuard:
                                             (b"content-length", str(len(body)).encode()),
                                             *extra]})
             await send_secured({"type": "http.response.body", "body": body})
-
-        method = scope.get("method", "GET").upper()
-        path = scope.get("path", "")
 
         # 1. Host, before anything else.
         hosts = headers.get("host", [])

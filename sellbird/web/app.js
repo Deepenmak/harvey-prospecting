@@ -298,9 +298,17 @@ function offlineState() {
     'The dashboard process may have stopped. Restart it with <b>sellbird dashboard</b> and refresh this page.');
 }
 
+// How many requests in a row never reached the server. A refusal or a 500
+// is an answer and doesn't count; only a request that couldn't be sent does.
+// The refresh schedule reads this and slows right down, so a dashboard that
+// has been stopped is asked once a minute instead of several times a second
+// for as long as the tab stays open.
+let _transportFailures = 0;
+
 async function api(path, opts) {
   try {
     const r = await authFetch(path, opts);
+    _transportFailures = 0;
     if (await lockIfRefused(r)) return null;
     if (!r.ok) {
       // An action the server refused says why ("a run is already going");
@@ -311,6 +319,7 @@ async function api(path, opts) {
     }
     return await r.json();
   } catch {
+    _transportFailures += 1;
     return null;
   }
 }
@@ -4088,41 +4097,94 @@ startRouting();        // loads whichever tab the URL asks for
 loadSellbirdStatus();  // the header's running light, on every tab
 loadSignedInAs();      // shows Sign out when this is a sign-in, not a token
 
-// Agent status: quick poll (not while locked: it would only be refused)
-setInterval(() => { if (!_locked) loadSellbirdStatus(); }, 8000);
+// ── Live refresh ──
+//
+// Four timers used to fire on their own schedules whatever else was
+// happening. One ignored a hidden tab entirely, so a dashboard left open in
+// a background window was polled every eight seconds for as long as the
+// browser ran. None of them stopped when the server went away. And none
+// waited for the previous request before sending the next, so a slow read
+// (Contacts joins the whole lead record) could have three answers in flight
+// rewriting the same table, and the last one to land won.
+//
+// One scheduler owns them now. A job runs only while the page is visible and
+// unlocked, never twice at once, and everything backs off to a minute while
+// requests aren't reaching the server at all. Coming back to the tab runs
+// whatever is due straight away instead of waiting out the rest of an
+// interval.
 
-// Live status panel: refreshed while the Today tab is open and visible.
-setInterval(() => {
-  if (!document.hidden && !_locked && currentTab === 'today') loadLiveStatus();
-}, 10000);
+const OFFLINE_WAIT_MS = 60000;
+const _refreshJobs = [];
 
-// Nav counts stay live wherever you are, so "something needs me" is visible
-// from any tab without polling that tab's contents.
-setInterval(async () => {
-  if (document.hidden || _locked || currentTab === 'today') return;
+// run() may return false to mean "that didn't work", which backs this one job
+// off without slowing the others.
+function every(ms, when, run) {
+  _refreshJobs.push({ms, when, run, last: Date.now(), busy: false, failed: false});
+}
+
+function refreshWait(job) {
+  return (job.failed || _transportFailures) ? Math.max(job.ms, OFFLINE_WAIT_MS) : job.ms;
+}
+
+async function runRefresh(job, now) {
+  job.busy = true;
+  job.last = now;
+  try {
+    job.failed = (await job.run()) === false;
+  } catch {
+    job.failed = true;
+  } finally {
+    job.busy = false;
+    job.last = Date.now();     // measure the gap from the end, not the start
+  }
+}
+
+function tickRefresh() {
+  if (document.hidden || _locked) return;
+  const now = Date.now();
+  for (const job of _refreshJobs) {
+    if (job.busy) continue;
+    if (job.when && !job.when()) continue;
+    if (now - job.last >= refreshWait(job)) runRefresh(job, now);
+  }
+}
+
+// The header's running light, wherever you are.
+every(8000, null, () => loadSellbirdStatus());
+
+// The pipeline card, while Today is open.
+every(10000, () => currentTab === 'today', () => loadLiveStatus());
+
+// Nav counts stay live from any tab, so "something needs me" is visible
+// without polling that tab's contents. Today refreshes them itself.
+every(20000, () => currentTab !== 'today', async () => {
   const data = await api('/api/today');
-  if (!data) return;
+  if (!data) return false;
   navCount('nav-today', (data.items || []).filter(i => i.tone !== 'good').length);
   navCount('nav-outbox', (data.stats || {}).outbox_pending || 0);
-}, 20000);
+});
 
-// Data tabs: auto-refresh live views without clobbering anything in progress.
-// Outbox, settings and help are deliberately excluded — re-rendering the desk
-// under someone mid-decision loses their place, and settings may be mid-edit.
-setInterval(() => {
-  if (document.hidden || _locked) return;
+// The open tab's own data. Outbox, settings and help are deliberately left
+// out — re-rendering the desk under someone mid-decision loses their place,
+// and settings may be mid-edit.
+every(15000, null, () => {
   switch (currentTab) {
-    case 'today': loadToday(); loadTrend(); loadFunnel(); loadRuns(); loadTodayActivity(); break;
-    case 'companies': if (!companyDrill) loadCompanies(); break;
-    case 'prospects': loadProspects(); break;
-    case 'campaigns': loadCampaigns(); break;
-    case 'conversations': loadConversations(); break;
-    case 'activity': loadActivity(); break;
-    case 'inboxes': loadInboxes(); break;
-    case 'usage': loadUsage(); break;
-    case 'controls': loadLogs(); break;
+    case 'today': return Promise.all([loadToday(), loadTrend(), loadFunnel(),
+                                      loadRuns(), loadTodayActivity()]);
+    case 'companies': return companyDrill ? undefined : loadCompanies();
+    case 'prospects': return loadProspects();
+    case 'campaigns': return loadCampaigns();
+    case 'conversations': return loadConversations();
+    case 'activity': return loadActivity();
+    case 'inboxes': return loadInboxes();
+    case 'usage': return loadUsage();
+    case 'controls': return loadLogs();
   }
-}, 15000);
+});
+
+setInterval(tickRefresh, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tickRefresh(); });
+window.addEventListener('focus', tickRefresh);
 
 
 // ── Your company (sellbird.offer): what Sellbird writes from, and the offer ──

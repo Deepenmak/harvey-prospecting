@@ -16,7 +16,7 @@ sellbird dashboard     # prints the link to open, e.g. http://127.0.0.1:5555/#to
 
 **Windows:** the token file is protected by the permissions of the folder it lives in (your user profile normally restricts this to you); Sellbird doesn't apply POSIX file modes there.
 
-Plain HTML, CSS and JavaScript served from `sellbird/web/`. No build step, no framework, no bundler — edit `app.css` and reload. Fonts are vendored, so it renders correctly with the network off.
+Plain HTML, CSS and JavaScript served from `sellbird/web/`. No build step, no framework, no bundler — edit `app.css` and reload. Fonts are vendored, so it renders correctly with the network off. Each file carries an ETag, so a reload revalidates instead of fetching 300 KB again; editing one still shows up on the next reload. One scheduler owns the live refreshes: a read runs only while the tab is visible and unlocked, never twice at once, and everything backs off to a minute while requests aren't reaching the server, so a stopped dashboard isn't polled for as long as the tab stays open.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="screenshots/today-dark.png">

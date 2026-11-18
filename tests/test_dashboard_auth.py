@@ -164,7 +164,11 @@ def test_shell_is_public_but_carries_no_data_or_token(anon, env, path):
     r = anon.get(path)
     assert r.status_code == 200
     assert env["token"] not in r.text
-    assert r.headers["cache-control"] == "no-store"
+    # The page itself is never stored. Its stylesheet, script and fonts are
+    # public, identical for everyone and served without a token, so they
+    # revalidate (ETag + 304) instead of being downloaded again every load;
+    # nothing is protected by refusing to store them.
+    assert r.headers["cache-control"] == ("no-store" if path == "/" else "no-cache")
     assert r.headers["referrer-policy"] == "same-origin"
     assert r.headers["x-frame-options"] == "DENY"
     assert r.headers["x-content-type-options"] == "nosniff"
