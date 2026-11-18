@@ -73,7 +73,7 @@ login_throttle = sessions.LoginThrottle()
 # Innermost first: the guard (added next) sets the principal before this runs.
 app.add_middleware(agent_policy.AgentPolicy)
 app.add_middleware(auth.DashboardGuard, store=token_store, agent_store=agent_token_store,
-                   sessions=session_store)
+                   sessions=session_store, credential=lambda: credential_mark())
 
 
 class home_middleware:
@@ -3610,6 +3610,22 @@ def login_configured() -> bool:
     return bool(user and secret)
 
 
+def credential_mark() -> str:
+    """The fingerprint of the sign-in credential as it stands right now.
+
+    A session carries the mark of the password that made it, so changing
+    DASHBOARD_PASS (or the hash, or the username) ends every sign-in made
+    under the old one. That is how an organisation takes someone's access
+    away: change the password, and they are out -- with nobody having to
+    remember to revoke a session.
+    """
+    return sessions.credential_fingerprint(
+        (os.getenv("DASHBOARD_USER") or "").strip(),
+        (os.getenv("DASHBOARD_PASS_HASH") or "").strip(),
+        (os.getenv("DASHBOARD_PASS") or "").strip() if not
+        (os.getenv("DASHBOARD_PASS_HASH") or "").strip() else "")
+
+
 def _password_ok(given: str) -> bool:
     """Check a password against DASHBOARD_PASS_HASH, else DASHBOARD_PASS.
 
@@ -3641,6 +3657,22 @@ def _request_source(request: Request) -> str:
         return forwarded
     client = request.client
     return client.host if client else "unknown"
+
+
+# Browsers put their name late in a long, mostly meaningless string, so the
+# first 80 characters of a user agent are all boilerplate. Keep the name and
+# nothing else: it is enough to tell one sign-in from another in the list, and
+# a whole user agent is more about the person than this needs to hold.
+_BROWSERS = (("Edg", "Edge"), ("OPR", "Opera"), ("Chrome", "Chrome"),
+             ("Firefox", "Firefox"), ("Safari", "Safari"))
+
+
+def browser_name(user_agent: str) -> str:
+    ua = str(user_agent or "")
+    for mark, name in _BROWSERS:
+        if mark in ua:
+            return name
+    return ""
 
 
 @app.post("/api/auth/login")
@@ -3685,8 +3717,8 @@ async def api_auth_login(request: Request):
                             status_code=401)
 
     login_throttle.record_success(source)
-    agent = (request.headers.get("user-agent") or "")[:80]
-    token = await asyncio.to_thread(session_store.create, agent)
+    agent = browser_name(request.headers.get("user-agent") or "")
+    token = await asyncio.to_thread(session_store.create, agent, credential_mark())
     logger.info("Dashboard sign-in from %s", source)
     return {"token": token, "expires_in": sessions.MAX_SECONDS,
             "idle_timeout": sessions.IDLE_SECONDS}

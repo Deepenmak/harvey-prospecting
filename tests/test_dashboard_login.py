@@ -7,6 +7,7 @@ to end it. These cover what it hands back now, what it refuses, and that the
 master token is never one of the things it can give away.
 """
 
+import json
 import os
 
 import pytest
@@ -268,3 +269,102 @@ def test_a_request_over_tls_is_told_to_stay_on_tls(client):
 def test_a_plain_local_dashboard_is_not(client):
     """A local http dashboard that sent HSTS would make itself unreachable."""
     assert "strict-transport-security" not in client.get("/").headers
+
+
+# ── Changing the password is how access is taken away ──
+
+
+def test_changing_the_password_ends_every_sign_in(client, monkeypatch):
+    """The point: an organisation takes someone's access away by changing the
+    password, and that has to end their open sessions without anyone
+    remembering to revoke anything."""
+    token = sign_in(client).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/sending-mode", headers=headers).status_code == 200
+
+    monkeypatch.setenv("DASHBOARD_PASS", "a-different-long-password")
+    assert client.get("/api/sending-mode", headers=headers).status_code == 401
+
+
+def test_changing_the_username_ends_them_too(client, monkeypatch):
+    token = sign_in(client).json()["token"]
+    monkeypatch.setenv("DASHBOARD_USER", "someone-else")
+    assert client.get("/api/sending-mode",
+                      headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_moving_from_a_plain_password_to_its_hash_ends_them(client, monkeypatch):
+    """Even though the password itself hasn't changed: the credential has,
+    and keeping the old sessions alive would mean the plain value still
+    mattered after it was supposed to be gone."""
+    token = sign_in(client).json()["token"]
+    monkeypatch.setenv("DASHBOARD_PASS_HASH", sessions.hash_password(PASSWORD))
+    assert client.get("/api/sending-mode",
+                      headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_the_new_password_signs_in_as_normal(client, monkeypatch):
+    sign_in(client)
+    monkeypatch.setenv("DASHBOARD_PASS", "a-different-long-password")
+    fresh = sign_in(client, password="a-different-long-password")
+    assert fresh.status_code == 200
+    assert client.get("/api/sending-mode",
+                      headers={"Authorization": f"Bearer {fresh.json()['token']}"}
+                      ).status_code == 200
+
+
+def test_an_unchanged_password_leaves_sessions_alone(client, monkeypatch):
+    """A redeploy that sets the same values must not sign everyone out."""
+    token = sign_in(client).json()["token"]
+    monkeypatch.setenv("DASHBOARD_PASS", PASSWORD)          # same value again
+    monkeypatch.setenv("DASHBOARD_USER", "operator")
+    assert client.get("/api/sending-mode",
+                      headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_the_master_token_is_not_affected_by_a_password_change(client, env, monkeypatch):
+    """It is a file on the server and the CLI uses it; a password it was
+    never connected to must not disable it."""
+    monkeypatch.setenv("DASHBOARD_PASS", "a-different-long-password")
+    assert client.get("/api/sending-mode",
+                      headers={"Authorization": f"Bearer {env['token']}"}).status_code == 200
+
+
+def test_what_is_signed_in_can_be_listed(client, env):
+    sign_in(client)
+    sign_in(client)
+    body = client.get("/api/auth/sessions",
+                      headers={"Authorization": f"Bearer {env['token']}"}).json()
+    assert len(body["sessions"]) == 2
+    assert body["idle_timeout"] == sessions.IDLE_SECONDS
+    for row in body["sessions"]:
+        assert set(row) >= {"id", "created_at", "expires_at", "label"}
+        assert "credential" not in json.dumps(row) or row.get("credential") is None
+
+
+@pytest.mark.parametrize("ua, expected", [
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like "
+     "Gecko) Chrome/141.0.0.0 Safari/537.36", "Chrome"),
+    ("Mozilla/5.0 ... Chrome/141 Safari/537.36 Edg/141.0.0.0", "Edge"),
+    ("Mozilla/5.0 ... Chrome/141 Safari/537.36 OPR/121.0.0.0", "Opera"),
+    ("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0", "Firefox"),
+    ("Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15", "Safari"),
+    ("curl/8.5.0", ""),
+    ("", ""),
+])
+def test_a_sign_in_records_the_browsers_name(ua, expected):
+    """Keeping the first 80 characters of a user agent kept only boilerplate
+    — the name comes later in the string — and a whole user agent is more
+    about the person than this needs to hold."""
+    assert dash.browser_name(ua) == expected
+
+
+def test_the_stored_label_is_the_name_and_not_the_user_agent(client, env):
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
+          "like Gecko) Chrome/141.0.0.0 Safari/537.36")
+    client.post("/api/auth/login", json={"username": "operator", "password": PASSWORD},
+                headers={"User-Agent": ua})
+    rows = client.get("/api/auth/sessions",
+                      headers={"Authorization": f"Bearer {env['token']}"}).json()["sessions"]
+    assert [r["label"] for r in rows] == ["Chrome"]
+    assert "Mozilla" not in json.dumps(rows)

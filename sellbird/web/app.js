@@ -387,6 +387,66 @@ async function signOut() {
   window.location.replace(_authMode && _authMode.login_enabled ? '/login' : '/');
 }
 
+// ── Who is signed in ──
+//
+// On a deployment the password is what stands between the pipeline and the
+// internet, so an operator needs to see how many browsers hold a live
+// sign-in and be able to end all of them. Nothing here identifies a person:
+// a sign-in records when it was made and what browser made it, and the
+// surest way to end someone's access is still to change the password, which
+// ends every sign-in made under the old one.
+
+async function loadSignIns() {
+  const head = document.getElementById('signins-head');
+  const card = document.getElementById('signins-card');
+  if (!card) return;
+  if (!(_authMode && _authMode.login_enabled)) {
+    if (head) head.style.display = 'none';
+    card.innerHTML = '';
+    return;
+  }
+  const data = await api('/api/auth/sessions');
+  if (!data) { card.innerHTML = ''; return false; }
+  if (head) head.style.display = '';
+  const rows = data.sessions || [];
+  const hours = n => Math.round(Number(n || 0) / 3600);
+  card.innerHTML = '<div class="card"><div class="settings-row"><div>' +
+    '<h3>' + rows.length + (rows.length === 1 ? ' sign-in' : ' sign-ins') + '</h3>' +
+    '<p class="desc">Each one lasts ' + hours(data.max_age) + ' hours, or ' +
+    hours(data.idle_timeout) + ' hours unused. Changing the dashboard password ends ' +
+    'every sign-in made under the old one, so that is how you take someone\'s access away.</p>' +
+    (data.warning ? '<div class="notice bad">' + escHtml(data.warning) + '</div>' : '') +
+    (rows.length ? '<div class="signin-list">' + rows.map(r =>
+      '<div class="signin"><span class="name">' +
+        escHtml(r.label || 'a browser') + '</span>' +
+        '<span class="when">signed in ' + relTime(tsIso(r.created_at)) + '</span>' +
+        '<span class="when">last used ' + relTime(tsIso(r.last_seen_at)) + '</span>' +
+      '</div>').join('') + '</div>' : '') +
+    '</div><div class="fields">' +
+    (rows.length ? '<button class="btn btn-secondary btn-sm" onclick="signOutEveryone()">' +
+      'Sign everyone out</button>' : '') +
+    '</div></div></div>';
+}
+
+// Seconds-since-epoch to something relTime() understands.
+function tsIso(seconds) {
+  const n = Number(seconds || 0);
+  return n > 0 ? new Date(n * 1000).toISOString() : '';
+}
+
+async function signOutEveryone() {
+  if (!confirm('Sign every browser out, including this one?')) return;
+  const res = await api('/api/auth/sessions', {method: 'DELETE'});
+  if (res && res.success) {
+    showToast('Signed out ' + res.ended + (res.ended === 1 ? ' browser' : ' browsers'), 'success');
+    clearAuthToken();
+    _locked = true;
+    window.location.replace('/login');
+  } else {
+    showToast(failMsg(res, 'Could not sign everyone out.'), 'error');
+  }
+}
+
 // The Sign out button belongs to sign-ins only: a token pasted from the
 // terminal has nothing on the server to end.
 async function loadSignedInAs() {
@@ -574,7 +634,7 @@ function loadCurrentTab() {
     case 'activity': loadActivity(); break;
     case 'inboxes': loadInboxes(); break;
     case 'usage': loadUsage(); break;
-    case 'settings': loadSettings(); loadSendingModeCard(); loadHours(); break;
+    case 'settings': loadSettings(); loadSendingModeCard(); loadHours(); loadSignIns(); break;
     case 'company': loadCompany(); break;
     case 'controls': loadSellbirdStatus(); loadLogs(); break;
   }

@@ -41,6 +41,13 @@ Without `SELLBIRD_CLOUD_HOST` the dashboard answers only to `localhost` and
 the public URL returns `bad_host`. With it set and no sign-in configured, the
 port is open but nobody holding a browser can get in; the startup log says so.
 
+**Taking someone's access away: change the password.** Every sign-in records
+which credential made it, so changing `DASHBOARD_PASS_HASH` (or `DASHBOARD_PASS`,
+or `DASHBOARD_USER`) ends every sign-in made under the old one the moment the new
+value is live — nobody has to remember to revoke a session. Redeploying with the
+same values leaves sign-ins alone. **Settings → Who is signed in** lists them and
+has **Sign everyone out**.
+
 A sign-in lasts **7 days**, or **12 hours unused**, whichever comes first, and
 **Sign out** in the sidebar ends it. Sessions are listed in
 `/config/data/sessions.json` as hashes — the tokens themselves are never

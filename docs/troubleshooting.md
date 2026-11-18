@@ -18,7 +18,7 @@
 
 **"Too many failed sign-ins"** — Five wrong passwords from one address, or twenty-five in all, stop sign-in for fifteen minutes; the reply says how long. It stops the right password too, on purpose. Waiting is the only way through: restarting the container clears the count, but if you can restart it you can also read `DASHBOARD_USER`.
 
-**Signed out unexpectedly** — A sign-in lasts 7 days, or 12 hours unused. `data/sessions.json` holding them is on the volume, so a redeploy keeps them; a *new* volume, or `DELETE /api/auth/sessions`, ends them all. Signing in again returns you to the tab you were on.
+**Signed out unexpectedly** — Changing `DASHBOARD_USER`, `DASHBOARD_PASS` or `DASHBOARD_PASS_HASH` ends every sign-in made under the old value, on purpose: that is how access is taken away. Otherwise a sign-in lasts 7 days, or 12 hours unused. `data/sessions.json` holding them is on the volume, so a redeploy keeps them; a *new* volume, or `DELETE /api/auth/sessions`, ends them all. Signing in again returns you to the tab you were on.
 
 **Back goes somewhere unexpected** — Every tab is a URL (`#/outbox`), so Back moves between the tabs you visited. It no longer lands on the sign-in form: `/login` now replaces its own history entry instead of leaving one behind, and visiting it while already signed in goes straight through.
 

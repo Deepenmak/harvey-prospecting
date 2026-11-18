@@ -379,12 +379,16 @@ class DashboardGuard:
     request, and the security headers to every response."""
 
     def __init__(self, app, store: TokenStore, agent_store: TokenStore | None = None,
-                 sessions=None):
+                 sessions=None, credential=None):
         self.app = app
         self.store = store
         self.agent_store = agent_store
         # sellbird.sessions.SessionStore, or None for token-only installs.
         self.sessions = sessions
+        # Called per request for the current sign-in credential's fingerprint.
+        # A session made under a different one is refused, so changing the
+        # password signs everybody out without anyone revoking anything.
+        self.credential = credential
 
     def _same_tokens_message(self) -> str:
         return (f"The agent token ({self.agent_store.path}) is the same as the dashboard "
@@ -486,7 +490,13 @@ class DashboardGuard:
             # A sign-in's own token: the user's rights, but with an end date
             # and a sign-out (sellbird.sessions).
             if self.sessions is not None and presented:
-                session = self.sessions.check(presented)
+                mark = ""
+                if self.credential is not None:
+                    try:
+                        mark = self.credential() or ""
+                    except Exception:
+                        mark = ""
+                session = self.sessions.check(presented, mark)
                 if session is not None:
                     principal = "user"
             if principal is None and self.agent_store is not None and authorization:

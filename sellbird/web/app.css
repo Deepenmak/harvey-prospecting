@@ -1249,3 +1249,12 @@ table.nowrap tr.detail-row > td { white-space: normal; }
 .write-now { display: flex; align-items: center; gap: var(--sp-2); justify-content: center; margin-top: var(--sp-3); }
 .write-now .muted, .live-next .muted { font-size: var(--fs-caption); }
 .bad-text { color: var(--bad); }
+
+/* Who is signed in (Settings). One line per live sign-in: when it was made,
+   when it was last used, and which browser made it. Never a person's name --
+   a sign-in doesn't know one. */
+.signin-list { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.signin { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+          font-size: 13px; }
+.signin .name { font-weight: 600; }
+.signin .when { color: var(--text-3); font-variant-numeric: tabular-nums; }

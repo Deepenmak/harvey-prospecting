@@ -50,6 +50,25 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8", "replace")).hexdigest()
 
 
+def credential_fingerprint(*parts: str) -> str:
+    """A short, one-way mark of the credential a session was made with.
+
+    Changing the password is how an organisation ends someone's access, and
+    it has to actually end it: a session minted under the old password must
+    stop working the moment the new one is set, without anyone remembering to
+    revoke anything. Sessions carry this mark and are dropped when it stops
+    matching.
+
+    It is a hash of a hash (or of the plain password, when that is all there
+    is), truncated, and it never leaves the server -- it identifies the
+    credential, it does not reveal it.
+    """
+    joined = "\x00".join(str(p or "") for p in parts)
+    if not joined.strip("\x00"):
+        return ""
+    return hashlib.sha256(joined.encode("utf-8", "replace")).hexdigest()[:32]
+
+
 class SessionStore:
     """Every live sign-in, on disk so a redeploy doesn't sign everyone out."""
 
@@ -79,6 +98,7 @@ class SessionStore:
                         "last_seen_at": float(row.get("last_seen_at") or 0),
                         "expires_at": float(row.get("expires_at") or 0),
                         "label": str(row.get("label") or "")[:120],
+                        "credential": str(row.get("credential") or "")[:64],
                     }
         except (OSError, ValueError, TypeError, AttributeError):
             rows = {}   # unreadable or corrupt: nobody is signed in, which is safe
@@ -121,8 +141,12 @@ class SessionStore:
 
     # ── use ──
 
-    def create(self, label: str = "") -> str:
-        """Mint a session and return its token. The token is never stored."""
+    def create(self, label: str = "", credential: str = "") -> str:
+        """Mint a session and return its token. The token is never stored.
+
+        ``credential`` is the fingerprint of the password it was made with
+        (see ``credential_fingerprint``), so changing the password ends it.
+        """
         token = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
@@ -132,14 +156,18 @@ class SessionStore:
                 "last_seen_at": now,
                 "expires_at": now + MAX_SECONDS,
                 "label": str(label or "")[:120],
+                "credential": str(credential or "")[:64],
             }
             self._rows = rows
             self._save(rows)
         return token
 
-    def check(self, token: str) -> dict | None:
-        """The session this token names, sliding its idle clock. None if it
-        is unknown, idle too long, or past its end."""
+    def check(self, token: str, credential: str = "") -> dict | None:
+        """The session this token names, sliding its idle clock.
+
+        None if it is unknown, idle too long, past its end, or made with a
+        password that is no longer the password.
+        """
         if not token:
             return None
         key = _hash(token)
@@ -149,7 +177,9 @@ class SessionStore:
             row = rows.get(key)
             if row is None:
                 return None
-            if row["expires_at"] <= now or now - row["last_seen_at"] >= IDLE_SECONDS:
+            stale = bool(credential) and row.get("credential", "") != credential
+            if stale or row["expires_at"] <= now \
+                    or now - row["last_seen_at"] >= IDLE_SECONDS:
                 rows.pop(key, None)
                 self._rows = rows
                 self._save(rows)
@@ -158,7 +188,9 @@ class SessionStore:
                 row["last_seen_at"] = now
                 self._rows = rows
                 self._save(rows)
-            return dict(row, id=key[:12])
+            return {"id": key[:12], "created_at": row["created_at"],
+                    "last_seen_at": row["last_seen_at"],
+                    "expires_at": row["expires_at"], "label": row["label"]}
 
     def revoke(self, token: str) -> bool:
         if not token:
@@ -188,7 +220,13 @@ class SessionStore:
             if len(rows) != len(before):
                 self._rows = rows
                 self._save(rows)
-            out = [dict(v, id=k[:12]) for k, v in rows.items()]
+            # Never the credential mark: with a plain password it is a hash
+            # of the password, and handing it out would make it guessable
+            # offline by anyone who can read one page of the dashboard.
+            out = [{"id": k[:12], "created_at": v["created_at"],
+                    "last_seen_at": v["last_seen_at"],
+                    "expires_at": v["expires_at"], "label": v["label"]}
+                   for k, v in rows.items()]
         out.sort(key=lambda r: r["created_at"], reverse=True)
         return out
 

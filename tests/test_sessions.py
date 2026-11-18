@@ -251,3 +251,43 @@ def test_the_same_password_hashes_differently_every_time():
 def test_a_hash_that_cannot_be_read_lets_nothing_through(stored):
     assert not verify_password("anything", stored)
     assert not verify_password("", stored)
+
+
+# ── A session is tied to the password that made it ──
+
+
+def test_a_session_made_under_another_password_is_refused(store):
+    token = store.create("browser", credential="old-mark")
+    assert store.check(token, "old-mark") is not None
+    assert store.check(token, "new-mark") is None
+
+
+def test_a_refused_session_is_dropped_not_just_hidden(store):
+    token = store.create("browser", credential="old-mark")
+    assert store.check(token, "new-mark") is None
+    assert store.check(token, "old-mark") is None      # gone, not merely filtered
+
+
+def test_no_credential_to_check_against_leaves_a_session_alone(store):
+    """Token-only installs have no password, so there is no mark to match
+    and a session must not be refused for lacking one."""
+    token = store.create("browser", credential="a-mark")
+    assert store.check(token, "") is not None
+
+
+def test_the_credential_mark_is_not_the_credential():
+    from sellbird.sessions import credential_fingerprint
+    mark = credential_fingerprint("operator", "scrypt$16384$8$1$aa$bb")
+    assert "operator" not in mark and "scrypt" not in mark
+    assert len(mark) == 32
+    assert credential_fingerprint("", "") == ""
+    # The same inputs give the same mark, or a redeploy would sign everyone out.
+    assert mark == credential_fingerprint("operator", "scrypt$16384$8$1$aa$bb")
+
+
+def test_the_mark_never_comes_back_out_of_the_store(store):
+    """With a plain password the mark is a hash of it, so handing it to a
+    page would make it guessable offline."""
+    token = store.create("browser", credential="secret-mark")
+    assert "secret-mark" not in json.dumps(store.sessions())
+    assert "secret-mark" not in json.dumps(store.check(token, "secret-mark"))
