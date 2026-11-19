@@ -2136,7 +2136,7 @@ function importRowsTable(rows) {
         ' <span class="verified" title="Apollo verified">&#10003;</span>' : '') + '</td>' +
       '<td>' + escHtml(r.company || r.domain || '') + '</td>' +
       '<td>' + escHtml(r.title || '') + '</td>' +
-      '<td>' + (linkedin ? '<a href="' + linkedin + '" target="_blank" rel="noopener noreferrer">Profile</a>' : '') + '</td>' +
+      '<td>' + (linkedin ? '<a href="' + linkedin + '" target="_blank" rel="noopener noreferrer">' + escHtml(linkedin) + '</a>' : '') + '</td>' +
       '<td><span class="badge ' + state[1] + '">' + escHtml(state[0]) + '</span></td>' +
       '<td class="muted">' + escHtml(r.route || '') + '</td>' +
       '<td>' + Number(r.credits || 0) + '</td></tr>';
@@ -3052,7 +3052,7 @@ async function showCompanyContacts(index) {
           '<span class="cell-sub">' + escHtml(p.title) + '</span></div></div></td>' +
         '<td>' + escHtml(p.email) + emailTag(p) + '</td>' +
         '<td>' + escHtml(p.phone) + phoneIcon + '</td>' +
-        '<td>' + (safeHref(p.linkedin_url) ? '<a href="' + safeHref(p.linkedin_url) + '" target="_blank" rel="noopener noreferrer">Profile</a>' : '') + '</td>' +
+        '<td>' + (safeHref(p.linkedin_url) ? '<a href="' + safeHref(p.linkedin_url) + '" target="_blank" rel="noopener noreferrer">' + escHtml(p.linkedin_url) + '</a>' : '') + '</td>' +
         '<td>' + badge(p.status) + '</td><td class="muted">' + sourceLabel(p.source) + '</td></tr>';
     }
     html += '</tbody></table></div>';
@@ -3382,7 +3382,7 @@ function leadDossier(p, i) {
     ['Where', t(p.location)],
     ['Email', p.email ? t(p.email) + emailTag(p) : 'none found'],
     ['Phone', p.phone ? t(p.phone) + (p.phone_verified ? ' ✓' : '') : ''],
-    ['LinkedIn', link ? '<a href="' + link + '" target="_blank" rel="noopener noreferrer">Profile</a>' : ''],
+    ['LinkedIn', link ? '<a href="' + link + '" target="_blank" rel="noopener noreferrer">' + escHtml(link) + '</a>' : ''],
     ['Segment', t(p.segment_label || p.segment)],
     ['Score', p.score ? meterHtml(p.score) + ' <span class="muted">' + Number(p.score) + '</span>' : ''],
     ['Found', t(sourceLabel(p.source)) + (p.fetched_at ? ' · ' + t(relTime(p.fetched_at)) : '')],
