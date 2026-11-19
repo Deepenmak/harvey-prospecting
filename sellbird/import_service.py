@@ -462,6 +462,7 @@ async def _record(store: ImportStore, batch_id: str, op, report) -> None:
                 "apollo_id": contact.get("apollo_id", ""),
                 "email_status": contact.get("email_status", ""),
                 "email": contact.get("email") or "",
+                "linkedin_url": contact.get("linkedin_url") or "",
             })
         elif result.organization:
             # Company facts add to what a row already knows rather than

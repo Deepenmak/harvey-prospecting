@@ -292,6 +292,25 @@ def test_enrichment_charges_a_credit_a_person_and_records_the_answer(store):
     assert batch["credits_spent"] == 2
 
 
+def test_enrichment_records_the_linkedin_url_on_the_row_too(store):
+    """The row's own linkedin_url column, not just enriched_json -- that is
+    the only field the staged-rows table on the Imports tab can show."""
+    class FakeApolloWithLinkedin(FakeApollo):
+        @staticmethod
+        def _person(email):
+            person = FakeApollo._person(email)
+            person["linkedin_url"] = f"https://linkedin.com/in/{person['first_name'].lower()}"
+            return person
+
+    batch_id = stage(store)["batch_id"]
+    asyncio.run(import_service.enrich(
+        store, batch_id, "people_match_email", max_credits=10,
+        client=FakeApolloWithLinkedin()))
+    rows = asyncio.run(store.get_rows(batch_id, status="enriched"))
+    assert len(rows) == 2
+    assert all(r["linkedin_url"].startswith("https://linkedin.com/in/") for r in rows)
+
+
 def test_the_cap_is_a_ceiling_not_a_suggestion(store):
     batch_id = stage(store)["batch_id"]
     report = asyncio.run(import_service.enrich(

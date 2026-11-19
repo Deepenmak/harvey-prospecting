@@ -2127,14 +2127,16 @@ function importRowsTable(rows) {
   if (!rows.length) return '';
   const shown = rows.slice(0, 100);
   let html = '<div class="table-card"><table class="nowrap"><thead><tr><th>Name</th><th>Email</th>' +
-    '<th>Company</th><th>Title</th><th>State</th><th>Route</th><th>Credits</th></tr></thead><tbody>';
+    '<th>Company</th><th>Title</th><th>LinkedIn</th><th>State</th><th>Route</th><th>Credits</th></tr></thead><tbody>';
   for (const r of shown) {
     const state = ROW_STATE[r.status] || [r.status, 't-idle'];
+    const linkedin = safeHref(r.linkedin_url);
     html += '<tr><td>' + escHtml(((r.first_name || '') + ' ' + (r.last_name || '')).trim() || '—') + '</td>' +
       '<td>' + escHtml(r.email || '') + (r.email_status === 'verified' ?
         ' <span class="verified" title="Apollo verified">&#10003;</span>' : '') + '</td>' +
       '<td>' + escHtml(r.company || r.domain || '') + '</td>' +
       '<td>' + escHtml(r.title || '') + '</td>' +
+      '<td>' + (linkedin ? '<a href="' + linkedin + '" target="_blank" rel="noopener noreferrer">Profile</a>' : '') + '</td>' +
       '<td><span class="badge ' + state[1] + '">' + escHtml(state[0]) + '</span></td>' +
       '<td class="muted">' + escHtml(r.route || '') + '</td>' +
       '<td>' + Number(r.credits || 0) + '</td></tr>';
