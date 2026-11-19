@@ -398,8 +398,11 @@ async def find_candidates(request: Request):
     global _run_task
     body = await _body(request)
     segment = str(body.get("segment") or "mix")[:60]
+    # Not "body.get('limit') or 25": that reads an explicit 0 as "not given"
+    # (0 is falsy in Python) and silently promotes it to the default, which
+    # let a request for 0 candidates through to run a real Apollo search.
     try:
-        limit = int(body.get("limit") or 25)
+        limit = int(body["limit"]) if "limit" in body and body["limit"] is not None else 25
     except (TypeError, ValueError):
         return _refuse("How many candidates? Give a whole number.")
     if not 1 <= limit <= 500:
@@ -432,3 +435,113 @@ async def find_candidates(request: Request):
 
     _run_task = jobs.start("apollo", _go())
     return {"success": True, "started": True, "segment": segment, "limit": limit}
+
+
+# ── Scheduled Scout sweep ──
+#
+# Off by default. Finding candidates is free (web search, no Apollo credit,
+# no Claude call); it is staged here exactly like anything else on this tab,
+# so nothing becomes a real contact without going through the same priced,
+# approved enrichment menu every other batch uses. sellbird.main runs the
+# same code on its own hourly clock when the schedule is turned on; these
+# routes are what Settings reads and writes, plus a "run it now" button.
+
+_scout_task: asyncio.Task | None = None
+_scout_state: dict = {"state": "idle", "batch_id": "", "message": "", "report": None}
+
+
+@router.get("/api/scout/schedule")
+async def get_scout_schedule():
+    from sellbird.main import (SCOUT_SCHEDULE_DEFAULT_HOURS, SCOUT_SCHEDULE_DEFAULT_PER_RUN,
+                               SCOUT_SCHEDULE_ENABLED_KEY, SCOUT_SCHEDULE_HOURS_KEY,
+                               SCOUT_SCHEDULE_LAST_RUN_KEY, SCOUT_SCHEDULE_PER_RUN_KEY)
+    store = _store()
+    await store.init_db()
+    enabled = (await store.get_setting(SCOUT_SCHEDULE_ENABLED_KEY, "")).strip().lower()
+    return {
+        "enabled": enabled in ("1", "true", "yes", "on"),
+        "every_hours": int((await store.get_setting(
+            SCOUT_SCHEDULE_HOURS_KEY, str(SCOUT_SCHEDULE_DEFAULT_HOURS))) or
+            SCOUT_SCHEDULE_DEFAULT_HOURS),
+        "per_run": int((await store.get_setting(
+            SCOUT_SCHEDULE_PER_RUN_KEY, str(SCOUT_SCHEDULE_DEFAULT_PER_RUN))) or
+            SCOUT_SCHEDULE_DEFAULT_PER_RUN),
+        "last_run_at": await store.get_setting(SCOUT_SCHEDULE_LAST_RUN_KEY, ""),
+    }
+
+
+@router.post("/api/scout/schedule")
+async def set_scout_schedule(request: Request):
+    """Turn the sweep on/off, and set how many candidates and how often."""
+    from sellbird.main import (SCOUT_SCHEDULE_ENABLED_KEY, SCOUT_SCHEDULE_HOURS_KEY,
+                               SCOUT_SCHEDULE_PER_RUN_KEY)
+    body = await _body(request)
+    store = _store()
+    await store.init_db()
+
+    if "enabled" in body:
+        await store.set_setting(SCOUT_SCHEDULE_ENABLED_KEY,
+                                "true" if body.get("enabled") else "false")
+    if "every_hours" in body:
+        try:
+            hours = int(body["every_hours"])
+        except (TypeError, ValueError):
+            return _refuse("every_hours must be a whole number.")
+        if not 1 <= hours <= 24:
+            return _refuse("Pick a cadence between every 1 and every 24 hours.")
+        await store.set_setting(SCOUT_SCHEDULE_HOURS_KEY, str(hours))
+    if "per_run" in body:
+        try:
+            per_run = int(body["per_run"])
+        except (TypeError, ValueError):
+            return _refuse("per_run must be a whole number.")
+        if not 1 <= per_run <= 100:
+            return _refuse("Pick between 1 and 100 candidates per sweep.")
+        await store.set_setting(SCOUT_SCHEDULE_PER_RUN_KEY, str(per_run))
+
+    return {"success": True, **(await get_scout_schedule())}
+
+
+@router.get("/api/scout/sweep")
+async def scout_sweep_status():
+    return dict(_scout_state)
+
+
+@router.post("/api/scout/sweep")
+async def run_scout_sweep_now(request: Request):
+    """Run one sweep right now, outside its own schedule. Spends nothing of
+    its own; the batch it stages still needs a human to buy anyone's address."""
+    global _scout_task
+    body = await _body(request)
+    # Not "body.get('limit') or 10": that reads an explicit 0 as "not given"
+    # (0 is falsy) and silently promotes it to the default, which let a
+    # request for 0 candidates through to start a real sweep anyway.
+    try:
+        limit = int(body["limit"]) if "limit" in body and body["limit"] is not None else 10
+    except (TypeError, ValueError):
+        return _refuse("How many candidates? Give a whole number.")
+    if not 1 <= limit <= 100:
+        return _refuse("Ask for between 1 and 100 candidates.")
+    if _scout_task is not None and not _scout_task.done():
+        return _refuse("A sweep is already running. Wait for it to finish.", 409)
+
+    store = _store()
+    await store.init_db()
+    _scout_state.update(state="running", batch_id="", message="", report=None)
+
+    async def _go():
+        try:
+            from sellbird.config import load_config, load_env
+            result = await import_service.stage_from_scout(
+                store, load_config(), load_env(), limit)
+            _scout_state.update(state="done", batch_id=result["batch_id"], report=result,
+                                message=f"{result['staged']} candidate(s) staged. "
+                                        "Nothing has been spent.")
+        except StagingError as e:
+            _scout_state.update(state="done", batch_id="", report=None, message=str(e))
+        except Exception as e:
+            logger.exception("scout sweep failed")
+            _scout_state.update(state="failed", message=f"The sweep failed: {type(e).__name__}")
+
+    _scout_task = jobs.start("scout_sweep", _go())
+    return {"success": True, "started": True, "limit": limit}

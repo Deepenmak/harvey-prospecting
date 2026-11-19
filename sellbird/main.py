@@ -151,6 +151,71 @@ def unusable_backlog_notice(summary: dict) -> str:
     )
 
 
+# ── Scheduled Scout sweep ──
+#
+# Off by default (Settings → Imports turns it on). Separate from Scout's
+# run() action above: that one writes straight into companies/prospects the
+# moment it finds something, which is right when Scout is the only source.
+# This fork's real source is Apollo, so a Scout find here is staged in
+# Imports like anything else -- nothing becomes a real contact, nothing is
+# bought, until a human says so. See sellbird.import_service.stage_from_scout.
+
+SCOUT_SCHEDULE_ENABLED_KEY = "scout_schedule_enabled"
+SCOUT_SCHEDULE_HOURS_KEY = "scout_schedule_every_hours"
+SCOUT_SCHEDULE_PER_RUN_KEY = "scout_schedule_per_run"
+SCOUT_SCHEDULE_LAST_RUN_KEY = "scout_schedule_last_run_at"
+SCOUT_SCHEDULE_DEFAULT_HOURS = 1
+SCOUT_SCHEDULE_DEFAULT_PER_RUN = 10
+
+
+async def scout_schedule_due(state: StateManager) -> bool:
+    """Whether the scheduled sweep should run this cycle."""
+    enabled = (await state.get_setting(SCOUT_SCHEDULE_ENABLED_KEY, "")).strip().lower()
+    if enabled not in ("1", "true", "yes", "on"):
+        return False
+    try:
+        every_hours = max(1, int(await state.get_setting(
+            SCOUT_SCHEDULE_HOURS_KEY, str(SCOUT_SCHEDULE_DEFAULT_HOURS))))
+    except ValueError:
+        every_hours = SCOUT_SCHEDULE_DEFAULT_HOURS
+    last_raw = (await state.get_setting(SCOUT_SCHEDULE_LAST_RUN_KEY, "")).strip()
+    if not last_raw:
+        return True
+    try:
+        last_run = datetime.fromisoformat(last_raw)
+    except ValueError:
+        return True
+    due_at = last_run + timedelta(hours=every_hours)
+    return datetime.now(last_run.tzinfo) >= due_at
+
+
+async def run_scout_sweep(state: StateManager, config: SellbirdConfig, env) -> None:
+    """Run one sweep and stage whatever Scout found. Always records that it
+    ran, even when nothing was found, so a quiet segment doesn't make the
+    next cycle think the sweep is still due."""
+    from sellbird import import_service
+    from sellbird.import_staging import StagingError
+    from sellbird.import_store import ImportStore
+
+    try:
+        per_run = max(1, int(await state.get_setting(
+            SCOUT_SCHEDULE_PER_RUN_KEY, str(SCOUT_SCHEDULE_DEFAULT_PER_RUN))))
+    except ValueError:
+        per_run = SCOUT_SCHEDULE_DEFAULT_PER_RUN
+
+    store = ImportStore(db_path=state.db_path)
+    await store.init_db()
+    try:
+        result = await import_service.stage_from_scout(store, config, env, limit=per_run)
+        logger.info("Scout sweep: staged %d candidate(s), %d confirmed free by Apollo.",
+                    result["staged"], result.get("confirmed", 0))
+    except StagingError as e:
+        logger.info(f"Scout sweep: {e}")
+    finally:
+        await state.set_setting(SCOUT_SCHEDULE_LAST_RUN_KEY,
+                                datetime.now(pytz.UTC).isoformat())
+
+
 async def decide_next_action(
     brain: Brain,
     state: StateManager,
@@ -340,6 +405,17 @@ async def heartbeat(stop_event: asyncio.Event | None = None):
             # 0. Approval or autopilot, as the config file says now: the
             # dashboard can switch it while Sellbird runs.
             await sync_sending_mode(config, state)
+
+            # 0b. The scheduled Scout sweep (off by default; Settings turns
+            # it on). Free, makes no Claude call and spends no Apollo
+            # credit, so it runs on its own clock regardless of quiet hours
+            # or brain availability -- unlike everything below it, which
+            # needs Claude and respects both.
+            try:
+                if await scout_schedule_due(state):
+                    await run_scout_sweep(state, config, env)
+            except Exception as e:  # never a reason to stop the real loop
+                logger.warning(f"Scout sweep failed: {e}")
 
             # 1. Check quiet hours. With send windows in recipients' own time
             # zones, quiet hours only stop prospecting and writing: a cycle

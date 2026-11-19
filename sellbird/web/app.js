@@ -1847,9 +1847,108 @@ function importActions(html) {
   document.getElementById('imports-actions').innerHTML = html;
 }
 
+// ── Scheduled Scout sweep ──
+//
+// Off by default. Finding candidates is free (web search, no Apollo credit,
+// no Claude call); they land in Imports exactly like any other staged list,
+// so nothing becomes a real contact until a human buys an address through
+// the same priced, approved menu every batch here uses.
+let _scoutSweepPoll = null;
+
+async function loadScoutSchedule() {
+  const el = document.getElementById('scout-schedule-card');
+  if (!el) return;
+  const [sched, status] = await Promise.all([
+    api('/api/scout/schedule'), api('/api/scout/sweep')]);
+  if (!sched) { el.innerHTML = ''; return; }
+  const running = status && status.state === 'running';
+  if (running && !_scoutSweepPoll) {
+    _scoutSweepPoll = setInterval(async () => {
+      const s = await api('/api/scout/sweep');
+      if (!s || s.state !== 'running') {
+        clearInterval(_scoutSweepPoll);
+        _scoutSweepPoll = null;
+        loadScoutSchedule();
+        if (!_importBatch) loadImports();
+      }
+    }, 3000);
+  }
+  el.innerHTML = '<div class="card settings-row">' +
+    '<div>' +
+      '<h3>Scheduled finds <span class="email-tag">' +
+        (sched.enabled ? 'on' : 'off') + '</span></h3>' +
+      '<p class="desc">Scout searches the open web for companies matching your segments, ' +
+        'free, and stages what it finds here &mdash; nothing becomes a real contact, and ' +
+        'nothing is bought, until you say so.' +
+        (sched.last_run_at ? ' Last ran ' + relTime(sched.last_run_at) + '.'
+                           : ' Has not run yet.') +
+        (running ? ' <b>Running now&hellip;</b>' : '') + '</p>' +
+    '</div>' +
+    '<div class="fields">' +
+      '<div class="form-group">' +
+        '<label class="form-label"><input type="checkbox" id="scout-sched-on"' +
+          (sched.enabled ? ' checked' : '') +
+          ' onchange="setScoutSchedule()"> Run automatically</label>' +
+      '</div>' +
+      '<div class="form-row">' +
+        '<div class="form-group"><label class="form-label" for="scout-sched-per-run">' +
+          'Candidates per sweep</label>' +
+          '<input class="form-input" type="number" min="1" max="100" ' +
+          'id="scout-sched-per-run" value="' + Number(sched.per_run) +
+          '" onchange="setScoutSchedule()"></div>' +
+        '<div class="form-group"><label class="form-label" for="scout-sched-hours">' +
+          'Every (hours)</label>' +
+          '<input class="form-input" type="number" min="1" max="24" ' +
+          'id="scout-sched-hours" value="' + Number(sched.every_hours) +
+          '" onchange="setScoutSchedule()"></div>' +
+      '</div>' +
+      '<button class="btn btn-secondary btn-sm" id="scout-sweep-now"' +
+        (running ? ' disabled' : '') + ' onclick="runScoutSweepNow()">' +
+        (running ? 'Running…' : 'Run now') + '</button>' +
+      '<span id="scout-sweep-note" class="muted"></span>' +
+    '</div></div>';
+}
+
+async function setScoutSchedule() {
+  const enabled = document.getElementById('scout-sched-on').checked;
+  const perRun = Number(document.getElementById('scout-sched-per-run').value || 10);
+  const everyHours = Number(document.getElementById('scout-sched-hours').value || 1);
+  const res = await api('/api/scout/schedule', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled, per_run: perRun, every_hours: everyHours}),
+  });
+  if (!res || res.success === false) {
+    showToast(failMsg(res, 'Could not save that.'), 'error');
+  }
+  // Either way: a failure puts the form back to what is actually saved, and
+  // a success refreshes the "on/off" badge and the description text, which
+  // otherwise sat stale until the next unrelated reload.
+  loadScoutSchedule();
+}
+
+async function runScoutSweepNow() {
+  const btn = document.getElementById('scout-sweep-now');
+  const note = document.getElementById('scout-sweep-note');
+  const perRun = Number(document.getElementById('scout-sched-per-run')?.value || 10);
+  if (btn) btn.disabled = true;
+  const res = await api('/api/scout/sweep', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({limit: perRun}),
+  });
+  if (!res || res.success === false) {
+    if (note) note.textContent = ' ' + failMsg(res, 'Could not start that.');
+    if (btn) btn.disabled = false;
+    return;
+  }
+  loadScoutSchedule();
+}
+
 async function loadImports() {
   if (_importBatch) return loadImportBatch(_importBatch);
   const el = document.getElementById('imports-body');
+  loadScoutSchedule();
   const data = await api('/api/imports');
   if (!data) { el.innerHTML = offlineState(); return; }
   importActions('<button class="btn btn-primary" onclick="openImportContacts()">' +
@@ -1895,6 +1994,8 @@ function closeImport() {
 
 async function loadImportBatch(id) {
   const el = document.getElementById('imports-body');
+  const schedEl = document.getElementById('scout-schedule-card');
+  if (schedEl) schedEl.innerHTML = '';   // one batch's detail, not the settings
   const data = await api('/api/imports/' + encodeURIComponent(id));
   if (!data) { el.innerHTML = offlineState(); return; }
   if (data.success === false) { closeImport(); return; }

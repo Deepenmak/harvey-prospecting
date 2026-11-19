@@ -209,6 +209,101 @@ class Scout:
         )
         logger.info(f"Scout: Found {prospects_found} new prospects this cycle.")
 
+    # ── Scheduled sweep: candidates for staging, not the pipeline ──
+    #
+    # run() above (and its strategies) write straight into companies and
+    # prospects the moment something looks promising -- right for upstream
+    # Sellbird, where Scout is the only source. This fork's real source is
+    # Apollo, and a candidate Scout merely *found on the web* has not been
+    # checked against Apollo's own industry/headcount/tech-stack data at all.
+    # sweep_candidates() finds companies the same way, but commits nothing:
+    # it returns plain dicts for sellbird.import_service.stage_from_scout()
+    # to stage, exactly like a CSV upload, so nothing becomes a real contact
+    # until a human (or the free Apollo lookups that staging triggers) has
+    # had a chance to say whether it actually fits.
+
+    def _segment_search_queries(self, limit_segments: int = 2) -> list[str]:
+        """Search queries built from segments.yaml's real targeting, not the
+        empty ``icp:`` block run() rotates through for upstream installs."""
+        try:
+            from sellbird.fetch import load_segments
+            spec = load_segments()
+        except Exception as e:
+            logger.debug(f"Scout: segments.yaml unavailable for sweep: {e}")
+            return []
+        queries = []
+        for seg in spec.get("segments", [])[:limit_segments]:
+            tags = seg.get("keyword_tags") or []
+            locations = seg.get("locations") or []
+            if not tags:
+                continue
+            tag = tags[0]
+            loc = locations[0] if locations else ""
+            parts = [f'"{tag}"']
+            if loc:
+                parts.append(f'"{loc}"')
+            parts.append("company")
+            queries.append(" ".join(parts))
+        seen, out = set(), []
+        for q in queries:
+            if q not in seen:
+                seen.add(q)
+                out.append(q)
+        return out
+
+    async def sweep_candidates(self, limit: int = 10) -> list[dict]:
+        """Find up to ``limit`` ICP-shaped companies on the open web, for
+        free, and hand them back as plain dicts. Writes nothing to the
+        database except the read-only checks (do-not-contact, already-known)
+        that keep it from wasting a search on someone already in the
+        pipeline.
+        """
+        self._queries_this_cycle = 0
+        self._seen_domains = set()
+        queries = self._segment_search_queries()
+        if not queries:
+            logger.info("Scout: sweep has no segments.yaml targeting to search with.")
+            return []
+
+        candidates: list[dict] = []
+        for query in queries:
+            if len(candidates) >= limit or self._queries_this_cycle >= MAX_QUERIES_PER_CYCLE:
+                break
+            try:
+                results = await self._web_search(query)
+            except Exception as e:
+                logger.debug(f"Scout: sweep search failed for {query!r}: {e}")
+                continue
+            for url, snippet in results:
+                if len(candidates) >= limit:
+                    break
+                domain = self._extract_domain(url)
+                if not self._is_candidate_domain(domain):
+                    continue
+                self._seen_domains.add(domain)
+                try:
+                    if await self.state.company_exists(domain):
+                        continue
+                except Exception as e:
+                    logger.debug(f"Scout: company_exists failed for {domain}: {e}")
+                if self._do_not_contact_entry(domain):
+                    continue
+                try:
+                    info = await self._scrape_company_info(domain)
+                except Exception as e:
+                    logger.debug(f"Scout: could not read {domain}: {e}")
+                    info = {"name": "", "description": "", "website": f"https://{domain}"}
+                candidates.append({
+                    "company": info.get("name") or self._domain_to_name(domain),
+                    "domain": domain,
+                    "_raw": {"domain": domain, "website": info.get("website", ""),
+                             "description": info.get("description", ""),
+                             "source": "scout_sweep", "source_url": url,
+                             "found_via_query": query, "snippet": snippet},
+                })
+        logger.info(f"Scout: sweep found {len(candidates)} candidate(s) to stage.")
+        return candidates
+
     # ── Do-not-contact ──
 
     def _do_not_contact_entry(self, domain: str) -> str:

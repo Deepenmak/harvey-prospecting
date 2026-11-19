@@ -118,6 +118,87 @@ async def stage_from_apollo(store: ImportStore, config, segment: str = "mix",
             "analysis": analysis}
 
 
+async def stage_from_scout(store: ImportStore, config, env, limit: int = 10,
+                           client=None) -> dict:
+    """Scout's free web search, staged exactly like a CSV or an Apollo
+    search. Spends nothing of its own.
+
+    ``config`` and ``env`` are the caller's own (``load_config()``,
+    ``load_env()``), the same objects the heartbeat gives Scout, so the
+    sweep honours the real ``compliance.do_not_contact`` list rather than a
+    blank default one.
+
+    A company Scout merely found on the open web has not been checked
+    against Apollo's own data at all, so this does one more thing
+    ``stage_from_apollo`` does not need to: it immediately runs the free
+    ``org_search`` lookup (0 credits -- industry, headcount, tech stack) on
+    every row with a domain, so the batch lands in Imports with a real,
+    Apollo-sourced fit signal instead of a bare guess from a search snippet.
+    Finding the actual person, and buying their address, is still a
+    separate, priced, human-approved step through the same menu every other
+    staged batch uses.
+
+    ``client`` lets a test or a caller that already holds an open Apollo
+    connection supply it; left as None, the free lookup opens and closes its
+    own, the same as every other ``enrich()`` call that doesn't own one.
+    """
+    from sellbird.agents.scout import Scout
+    from sellbird.brain import Brain
+
+    try:
+        brain = Brain(store)
+    except Exception as e:
+        logger.info("Scout sweep will run without a brain (not needed): %s", e)
+        brain = None
+    scout = Scout(brain, store, config, env)
+    candidates = await scout.sweep_candidates(limit=limit)
+    if not candidates:
+        raise StagingError("Scout found nothing new to stage this sweep")
+
+    label = f"Scout — {_now_label()}"
+    batch_id = await store.create_batch(name=label, source="scout")
+    staged = await store.add_rows(batch_id, candidates)
+    duplicates = await store.mark_known_contacts(batch_id)
+
+    # The free fit check. org_search is 0 credits, so enrich()'s cap check
+    # never triggers and no approval is needed -- the same reason a free
+    # lookup needs no cap anywhere else in this menu.
+    free_report = None
+    try:
+        free_report = await enrich(store, batch_id, "org_search", max_credits=0,
+                                   client=client)
+    except StagingError as e:
+        logger.info("Scout sweep: free org_search skipped: %s", e)
+    except Exception as e:
+        logger.warning("Scout sweep: free org_search failed: %s", e)
+
+    stored = await store.get_rows(batch_id)
+    analysis = fallback(stored, ["scout"], {}, duplicates)
+    analysis["pending"] = False
+    confirmed = sum(1 for r in stored if r.get("email_status") != "" or
+                    _json(r.get("enriched_json")).get("industry"))
+    analysis["summary"] = (
+        f"{staged} candidate(s) Scout found on the open web, free. "
+        + (f"Apollo confirmed {confirmed} of them as real companies "
+           "(industry/headcount), at no cost. " if free_report else
+           "Apollo's free lookup could not be reached, so none of these "
+           "are confirmed yet. ")
+        + "Nothing has been spent; finding and buying a real contact at "
+          "each one is the next, priced step.")
+    await store.update_batch(batch_id, status="review",
+                             analysis_json=json.dumps(analysis))
+    return {"batch_id": batch_id, "staged": staged, "duplicates": duplicates,
+            "confirmed": confirmed, "analysis": analysis}
+
+
+def _now_label() -> str:
+    """"Nov 19, 14:03 UTC" -- without the day-of-month padding flag that
+    only glibc platforms understand (%-d breaks on Windows)."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    return f"{now.strftime('%b')} {now.day}, {now.strftime('%H:%M')} UTC"
+
+
 async def analyse_batch(store: ImportStore, batch_id: str, brain) -> dict:
     """Claude's reading of a staged batch, folded into what is already there.
 
